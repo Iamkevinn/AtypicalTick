@@ -9,13 +9,24 @@ from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import os
 import sqlite3
-import random
 
-def add_column_if_not_exists(cursor, table, col_name, col_type):
-    cursor.execute(f"PRAGMA table_info({table})")
-    columns = [col[1] for col in cursor.fetchall()]
-    if col_name not in columns:
-        cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_type}")
+# --- Modulos clinicos separados ---
+from deteccion_crisis import detectar_riesgo, respuesta_crisis
+from efectividad_historica_v2 import obtener_efectividad_historica
+from discrepancia_emocional import detectar_discrepancia_motivo
+from siguiente_experimento import generar_siguiente_experimento
+from feedback_discrepancia import init_tabla_feedback, registrar_feedback_discrepancia
+from prediccion_vs_resultado import (
+    init_tabla_predicciones, registrar_prediccion,
+    cerrar_prediccion_con_resultado, obtener_contrastes_recientes
+)
+from evidencia_acumulada import obtener_evidencia_acumulada
+from correccion_decisiones import (
+    init_tabla_correcciones, registrar_correccion, carpeta_fue_corregida_como_critica
+)
+
+class PeticionAutocuidado(BaseModel):
+    tipo: str
 
 def init_db():
     conn = sqlite3.connect('atypical_data.db')
@@ -45,23 +56,27 @@ def init_db():
         )
     ''')
 
-    # Actualizaciones seguras del schema
-    add_column_if_not_exists(cursor, "interacciones", "dia_semana", "TEXT")
-    add_column_if_not_exists(cursor, "interacciones", "carpeta", "TEXT")
-    add_column_if_not_exists(cursor, "interacciones", "etiquetas", "TEXT")
-    add_column_if_not_exists(cursor, "interacciones", "metadata_ia", "TEXT")
-    add_column_if_not_exists(cursor, "sesiones_tarea", "energia", "TEXT")
-    add_column_if_not_exists(cursor, "sesiones_tarea", "carpeta", "TEXT")
+    try: cursor.execute("ALTER TABLE interacciones ADD COLUMN dia_semana TEXT")
+    except: pass
+    try: cursor.execute("ALTER TABLE interacciones ADD COLUMN carpeta TEXT")
+    except: pass
+    try: cursor.execute("ALTER TABLE interacciones ADD COLUMN etiquetas TEXT") 
+    except: pass
+    try: cursor.execute("ALTER TABLE sesiones_tarea ADD COLUMN energia TEXT") 
+    except: pass
+    try: cursor.execute("ALTER TABLE interacciones ADD COLUMN metadata_ia TEXT") 
+    except: pass
+    try: cursor.execute("ALTER TABLE sesiones_tarea ADD COLUMN carpeta TEXT") 
+    except: pass
     
     conn.commit()
     conn.close()
 
-# Nueva función para registrar todo lo que hace el usuario
 def registrar_interaccion(tarea_id: str, tarea_nombre: str, energia: str, accion: str, emocion: str = None, carpeta: str = "Inbox", etiquetas: str = "", metadata_ia: str = ""):
     try:
         ahora = datetime.now()
         hora_actual = ahora.hour
-        dias = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
+        dias = ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado", "Domingo"]
         dia_semana = dias[ahora.weekday()]
 
         conn = sqlite3.connect('atypical_data.db')
@@ -73,22 +88,20 @@ def registrar_interaccion(tarea_id: str, tarea_nombre: str, energia: str, accion
         conn.commit()
         conn.close()
     except Exception as e:
-        print("🚨 Error al guardar interacción:", e)
+        print("Error al guardar interaccion:", e)
         
 init_db()
+init_tabla_feedback()
+init_tabla_predicciones()
+init_tabla_correcciones()
 
-# ---------------------------------------------------------
-# MOTOR CLÍNICO v2: Perfil Dinámico y Reanclaje
-# ---------------------------------------------------------
 def analizar_perfil_clinico(carpeta: str, etiquetas: list):
     try:
         conn = sqlite3.connect('atypical_data.db')
         cursor = conn.cursor()
         
-        # Convertimos la lista de etiquetas a un texto para buscarlo (ej. "urgente, trabajo")
         etiquetas_str = ",".join(etiquetas).lower() if etiquetas else "sin_etiquetas"
 
-        # [MODIFICADO]: Busca si esta carpeta O estas etiquetas generan problemas
         cursor.execute("""
             SELECT emocion_motivo, COUNT(*) FROM interacciones 
             WHERE (carpeta = ? OR (etiquetas != '' AND ? LIKE '%' || etiquetas || '%'))
@@ -105,7 +118,7 @@ def analizar_perfil_clinico(carpeta: str, etiquetas: list):
         emocion_principal = resultados[0][0].lower()
         if "ansiedad" in emocion_principal or "miedo" in emocion_principal:
             return {"dominante": emocion_principal, "perfil": "evitacion"}
-        elif "agotado" in emocion_principal or "energía" in emocion_principal:
+        elif "agotado" in emocion_principal or "energia" in emocion_principal:
             return {"dominante": emocion_principal, "perfil": "agotamiento"}
         elif "entiendo" in emocion_principal or "claridad" in emocion_principal:
             return {"dominante": emocion_principal, "perfil": "falta_claridad"}
@@ -114,55 +127,10 @@ def analizar_perfil_clinico(carpeta: str, etiquetas: list):
     except: 
         return {"dominante": None, "perfil": "desconocido"}
 
-# [NUEVO]: Extraemos la "Tasa de Éxito" de cada intervención de la IA según el bloqueo
-def obtener_efectividad_historica(motivo_bloqueo: str, energia_actual: str):
-    try:
-        conn = sqlite3.connect('atypical_data.db')
-        cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT intervencion_usada, 
-                   COUNT(*) as total_veces, 
-                   SUM(CASE WHEN resultado_final IN ('completada', 'avance_parcial', 'paso1_realizado') THEN 1 ELSE 0 END) as exitos_movimiento,
-                   SUM(CASE WHEN resultado_final IN ('abandono_consciente', 'pospuesta', 'rechazada') THEN 1 ELSE 0 END) as fallos
-            FROM sesiones_tarea 
-            WHERE bloqueo_inicial = ? AND energia = ?
-            GROUP BY intervencion_usada
-        """, (motivo_bloqueo, energia_actual))
-        
-        resultados = cursor.fetchall()
-        conn.close()
-        
-        mejor_intervencion, peor_intervencion = None, None
-        mejor_tasa, peor_tasa = -1, -1
-
-        for fila in resultados:
-            intervencion, total, exitos, fallos = fila[0], fila[1], (fila[2] or 0), (fila[3] or 0)
-            
-            tasa_exito = round((exitos / total) * 100)
-            tasa_fallo = round((fallos / total) * 100)
-            
-            # EL CAMBIO CRÍTICO: Muestra mínima estadística >= 5
-            if total >= 5 and tasa_exito > mejor_tasa and tasa_exito >= 50:
-                mejor_tasa = tasa_exito
-                mejor_intervencion = intervencion
-                
-            if total >= 5 and tasa_fallo > peor_tasa and tasa_fallo >= 50:
-                peor_tasa = tasa_fallo
-                peor_intervencion = intervencion
-            
-        return mejor_intervencion, peor_intervencion
-    except Exception as e:
-        return None, None
-        
-# ---------------------------------------------------------
-# MOTOR CLÍNICO 2: Reconocimiento de Patrones Emocionales
-# ---------------------------------------------------------
 def obtener_patron_contextual(carpeta: str, dia_semana: str):
     try:
         conn = sqlite3.connect('atypical_data.db')
         cursor = conn.cursor()
-        # Buscamos qué le pasa a este usuario CON ESTA CARPETA EN ESTE DÍA ESPECÍFICO
         cursor.execute("""
             SELECT emocion_motivo, COUNT(*) as frec FROM interacciones 
             WHERE carpeta = ? AND dia_semana = ? AND emocion_motivo IS NOT NULL AND emocion_motivo != ''
@@ -170,7 +138,6 @@ def obtener_patron_contextual(carpeta: str, dia_semana: str):
         """, (carpeta, dia_semana))
         resultado = cursor.fetchone()
         
-        # Si no hay datos de ese día, buscamos el patrón general de esa carpeta
         if not resultado:
             cursor.execute("""
                 SELECT emocion_motivo, COUNT(*) as frec FROM interacciones 
@@ -201,14 +168,12 @@ def calcular_dias_ausente():
         
         if ultima:
             fecha_ultima = datetime.strptime(ultima[0], "%Y-%m-%d %H:%M:%S")
-            # Usamos utcnow en lugar de now para estar en la misma zona horaria que SQLite
             dias = (datetime.utcnow() - fecha_ultima).days 
-            return max(0, dias) # <-- La protección clave
+            return max(0, dias)
         return 0
     except: return 0
 
 def contar_intentos_hoy():
-    # Depresión: Las pequeñas victorias cuentan (abrir, pedir ayuda, intentar)
     try:
         conn = sqlite3.connect('atypical_data.db')
         cursor = conn.cursor()
@@ -224,12 +189,10 @@ def contar_intentos_hoy():
 
 load_dotenv()
 
-# NUEVO: Cuenta FRICCIÓN CONSECUTIVA, no intentos totales
 def contar_friccion_consecutiva(tarea_id: str):
     try:
         conn = sqlite3.connect('atypical_data.db')
         cursor = conn.cursor()
-        # Traemos todas las acciones de hoy para esta tarea, desde la más reciente
         cursor.execute("""
             SELECT accion FROM interacciones 
             WHERE tarea_id = ? AND date(timestamp) = date('now')
@@ -240,29 +203,38 @@ def contar_friccion_consecutiva(tarea_id: str):
         
         friccion = 0
         for (acc,) in acciones:
-            # 1. SOLO LA ACCIÓN FÍSICA REAL rompe la racha de fricción
             if acc in ['completada', 'avance_parcial', 'paso1_realizado']:
                 break
-            
-            # 2. "Orbitar" (mirar o comprometerse pero no hacer) sigue sumando fricción
             if acc in ['intento', 'afronto_ansiedad', 'pidio_ayuda', 'exposicion_mirar', 'paso1_comprometido']:
                 friccion += 1
-                
         return friccion
     except: return 0
 
+def fue_perdonada_recientemente(tarea_id: str) -> bool:
+    try:
+        conn = sqlite3.connect('atypical_data.db')
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT COUNT(*) FROM interacciones
+            WHERE tarea_id = ? AND accion = 'perdonada'
+            AND timestamp >= datetime('now', '-7 days')
+        """, (tarea_id,))
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count > 0
+    except:
+        return False
+
 app = FastAPI(title="AtypicalTick API")
 
-# Esto es VITAL para que tu futuro frontend en React pueda hablar con este backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # En producción se cambia por localhost:3000
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Añadimos un parámetro a la URL: ?energia=alta o ?energia=baja
 @app.get("/api/enfoque")
 def obtener_tarea_enfoque(energia: str = "alta"):
     token = obtener_token()
@@ -270,8 +242,13 @@ def obtener_tarea_enfoque(energia: str = "alta"):
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
 
     url_listas = "https://api.ticktick.com/open/v1/project"
-    resp_listas = requests.get(url_listas, headers=headers)
-    if resp_listas.status_code != 200: raise HTTPException(status_code=500)
+
+    try:
+        resp_listas = requests.get(url_listas, headers=headers, timeout=10)
+        if resp_listas.status_code != 200: raise HTTPException(status_code=500)
+    except requests.exceptions.RequestException as e:
+        print(f"Error al obtener listas de TickTick: {e}")
+        raise HTTPException(status_code=503, detail="TickTick tardo demasiado en responder.")
         
     listas = resp_listas.json()
     mapa_carpetas = {lista['id']: lista['name'] for lista in listas}
@@ -279,19 +256,24 @@ def obtener_tarea_enfoque(energia: str = "alta"):
 
     todas_las_tareas = []
     for lista in listas:
-        # 🚫 FIX: Ignorar carpetas que TickTick marca como cerradas
         if lista.get('closed') == True or lista.get('isClosed') == True:
             continue
-            
-        # 🚫 FIX: Ignorar si la carpeta se llama explícitamente "Archivado"
         nombre_lista = lista.get('name', '').lower()
         if nombre_lista in ['archivado', 'archived', 'archived lists', 'trash']:
             continue
-            
+        
         url_tareas = f"https://api.ticktick.com/open/v1/project/{lista['id']}/data"
-        resp_tareas = requests.get(url_tareas, headers=headers)
-        if resp_tareas.status_code == 200:
-            todas_las_tareas.extend(resp_tareas.json().get('tasks', []))
+        
+        try:
+            resp_tareas = requests.get(url_tareas, headers=headers, timeout=10)
+            if resp_tareas.status_code == 200:
+                todas_las_tareas.extend(resp_tareas.json().get('tasks', []))
+            elif resp_tareas.status_code == 429:
+                print(f"TickTick nos pidio que frenemos (Rate Limit) en la lista {nombre_lista}")
+        except requests.exceptions.Timeout:
+            print(f"TickTick tardo demasiado en la lista '{nombre_lista}'. La saltamos por ahora.")
+        except requests.exceptions.RequestException as e:
+            print(f"Error de conexion con TickTick en lista '{nombre_lista}': {e}")
 
     conn = sqlite3.connect('atypical_data.db')
     cursor = conn.cursor()
@@ -305,7 +287,6 @@ def obtener_tarea_enfoque(energia: str = "alta"):
     hoy = ahora.date()
 
     for tarea in todas_las_tareas:
-        # 👻 EL MATAFANTASMAS: Si el estatus no es 0 (pendiente), la ignoramos por completo
         if tarea.get('status', 0) != 0:
             continue
 
@@ -331,7 +312,6 @@ def obtener_tarea_enfoque(energia: str = "alta"):
             id_proy = tarea.get('projectId', 'inbox')
             nombre_carpeta_t = mapa_carpetas.get(id_proy, "Inbox").lower()
             
-            # Es fácil O es de salud/medicina
             es_vital_o_facil = any(palabra in tags_lower for palabra in [
                 "baja-energia", "energia-baja", "facil", "simple", "rutina", "medicine", "medicina"
             ]) or "health" in nombre_carpeta_t or "salud" in nombre_carpeta_t
@@ -356,13 +336,26 @@ def obtener_tarea_enfoque(energia: str = "alta"):
             if dias_atraso > 0 and prio == 5: score -= 50
         return score
 
-    tareas_validas.sort(key=calcular_peso_psicologico)
-
     dias_ausente = calcular_dias_ausente()
+    modo_reingreso = dias_ausente > 7
+
+    if modo_reingreso:
+        def es_muy_atrasada(t):
+            if 'dueDate' not in t:
+                return False
+            fecha_t = datetime.strptime(t['dueDate'][:10], "%Y-%m-%d").date()
+            return (hoy - fecha_t).days > 7
+
+        atrasadas = [t for t in tareas_validas if es_muy_atrasada(t)]
+        recientes = [t for t in tareas_validas if not es_muy_atrasada(t)]
+        atrasadas.sort(key=lambda t: t.get('priority', 0))
+        tareas_validas = recientes + atrasadas[:1]
+
+    tareas_validas.sort(key=calcular_peso_psicologico)
     intentos_hoy = contar_intentos_hoy()
 
     if not tareas_validas:
-        return {"estado": "vacio", "mensaje": "✨ ¡Bandeja limpia por ahora!", "dias_ausente": dias_ausente}
+        return {"estado": "vacio", "mensaje": "Bandeja limpia por ahora!", "dias_ausente": dias_ausente}
 
     lista_formateada = []
     for t in tareas_validas:
@@ -379,12 +372,13 @@ def obtener_tarea_enfoque(energia: str = "alta"):
             "etiquetas": etiquetas,
             "prioridad": t.get('priority', 0),
             "perfil_clinico": analizar_perfil_clinico(nombre_carpeta, etiquetas),
-            "friccion_consecutiva": contar_friccion_consecutiva(t['id'])
+            "friccion_consecutiva": contar_friccion_consecutiva(t['id']),
+            "fue_auto_perdonada_antes": fue_perdonada_recientemente(t['id'])
         })
 
     return {
         "estado": "enfoque",
-        "tareas": lista_formateada, # <-- [MODIFICADO] Enviamos el arreglo completo
+        "tareas": lista_formateada,
         "fase": "calentamiento" if necesita_calentamiento else "trabajo_profundo",
         "estadisticas": {
             "dias_ausente": dias_ausente,
@@ -392,41 +386,83 @@ def obtener_tarea_enfoque(energia: str = "alta"):
         }
     }
 
+class PeticionFeedbackDiscrepancia(BaseModel):
+    motivo_declarado: str
+    energia: str
+    intervencion_sugerida: str
+    respuesta: str
 
+@app.post("/api/feedback-discrepancia")
+def feedback_discrepancia(datos: PeticionFeedbackDiscrepancia):
+    registrar_feedback_discrepancia(
+        datos.motivo_declarado, datos.energia, datos.intervencion_sugerida, datos.respuesta
+    )
+    return {"estado": "exito"}
 
-# (Tus funciones de /liberar y /posponer siguen exactamente igual)
-# --- RUTAS DE ACCIÓN ---
+class PeticionCorreccion(BaseModel):
+    tarea_id: str
+    tipo_decision: str
+    valor_original: str
+    correccion: str
+    carpeta: str = "Inbox"
 
-# [NUEVO]: Modelo para recibir la intención de rechazo
+@app.post("/api/corregir-decision")
+def corregir_decision(datos: PeticionCorreccion):
+    registrar_correccion(datos.tarea_id, datos.tipo_decision, datos.valor_original, datos.correccion, datos.carpeta)
+    return {"estado": "exito"}
+
+@app.post("/api/corregir-perdon/{proyecto_id}/{tarea_id}")
+def corregir_perdon(proyecto_id: str, tarea_id: str, tarea_nombre: str = "Desconocida", carpeta: str = "Inbox"):
+    token = obtener_token()
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+    url_tarea = f"https://api.ticktick.com/open/v1/project/{proyecto_id}/task/{tarea_id}"
+    try:
+        tarea = requests.get(url_tarea, headers=headers, timeout=10).json()
+        tarea['status'] = 0
+        hoy = datetime.now().date()
+        tarea['dueDate'] = hoy.strftime("%Y-%m-%dT12:00:00+0000")
+        requests.post(url_tarea, headers=headers, json=tarea, timeout=10)
+    except requests.exceptions.RequestException as e:
+        print(f"Error al corregir perdon en TickTick: {e}")
+        raise HTTPException(status_code=503, detail="TickTick tardo demasiado en responder.")
+
+    registrar_correccion(tarea_id, "perdon_rutina", "perdonada", "era_critica", carpeta)
+    registrar_interaccion(tarea_id, tarea_nombre, "desconocida", "correccion_perdon_revertida", "Usuario corrigio auto-perdon", carpeta)
+    return {"estado": "exito"}
+
 class PeticionRechazo(BaseModel):
     tarea_nombre: str = "Desconocida"
     energia: str = "desconocida"
     carpeta: str = "Inbox"
     intencion: str = "Sin intencion"
 
-# [MODIFICADO]: Ahora recibe el JSON y guarda la "intencion" en la columna "emocion_motivo"
 @app.post("/api/rechazar/{tarea_id}")
 def rechazar_tarea(tarea_id: str, datos: PeticionRechazo):
+    if detectar_riesgo(datos.intencion):
+        return respuesta_crisis()
     registrar_interaccion(tarea_id, datos.tarea_nombre, datos.energia, "rechazada", datos.intencion, datos.carpeta)
     return {"estado": "exito"}
 
 @app.post("/api/intento/{tarea_id}")
-def registrar_intento_valiente(tarea_id: str, accion: str = "intento", tarea_nombre: str = "", energia: str = "desconocida", carpeta: str = "Inbox"):    # NUEVO: Guarda cuando el usuario intenta dar el paso 1 (Victoria Oculta)
+def registrar_intento_valiente(tarea_id: str, accion: str = "intento", tarea_nombre: str = "", energia: str = "desconocida", carpeta: str = "Inbox"):
     registrar_interaccion(tarea_id, tarea_nombre, energia, accion, None, carpeta)
+    if accion in ('paso1_realizado', 'avance_parcial'):
+        cerrar_prediccion_con_resultado(tarea_id, accion)
     return {"estado": "exito"}
 
 @app.post("/api/liberar/{proyecto_id}/{tarea_id}")
 def liberar_tarea(proyecto_id: str, tarea_id: str, tarea_nombre: str = "Desconocida", energia: str = "desconocida", carpeta: str = "Inbox", bloqueo_previo: str = "Ninguno"):
     token = obtener_token()
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    respuesta = requests.post(f"https://api.ticktick.com/open/v1/project/{proyecto_id}/task/{tarea_id}/complete", headers=headers)
+    respuesta = requests.post(f"https://api.ticktick.com/open/v1/project/{proyecto_id}/task/{tarea_id}/complete", headers=headers, timeout=10)
     
     if respuesta.status_code == 200:
         registrar_interaccion(tarea_id, tarea_nombre, energia, "completada", None, carpeta)
+        cerrar_prediccion_con_resultado(tarea_id, "completada")
         
         conn = sqlite3.connect('atypical_data.db')
         cursor = conn.cursor()
-        # NUEVO: Guardamos la carpeta como contexto
         cursor.execute("INSERT INTO sesiones_tarea (tarea_id, bloqueo_inicial, intervencion_usada, resultado_final, energia, carpeta) VALUES (?, ?, ?, ?, ?, ?)",
               (tarea_id, bloqueo_previo, "Desglose IA" if bloqueo_previo != "Ninguno" else "Ninguna", "completada", energia, carpeta))
         conn.commit()
@@ -434,21 +470,23 @@ def liberar_tarea(proyecto_id: str, tarea_id: str, tarea_nombre: str = "Desconoc
         return {"estado": "exito"}
     raise HTTPException(status_code=500)
 
-# NUEVO: Modelo para recibir los datos de posponer conscientemente
 class PeticionPosponer(BaseModel):
     tarea_nombre: str = "Desconocida"
     energia: str = "desconocida"
     carpeta: str = "Inbox"
     motivo_posponer: str = "Sin motivo"
-    bloqueo_previo: str = "Ninguno" # Para saber si pospuso DESPUÉS de pedir ayuda a la IA
+    bloqueo_previo: str = "Ninguno"
 
 @app.post("/api/posponer/{proyecto_id}/{tarea_id}")
 def posponer_tarea(proyecto_id: str, tarea_id: str, datos: PeticionPosponer):
+    if detectar_riesgo(datos.motivo_posponer):
+        return respuesta_crisis()
+
     token = obtener_token()
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     
     url_tarea = f"https://api.ticktick.com/open/v1/project/{proyecto_id}/task/{tarea_id}"
-    tarea = requests.get(url_tarea, headers=headers).json()
+    tarea = requests.get(url_tarea, headers=headers, timeout=10).json()
     
     es_recurrente = bool(tarea.get('repeatFlag'))
     carpeta_lower = datos.carpeta.lower()
@@ -456,36 +494,28 @@ def posponer_tarea(proyecto_id: str, tarea_id: str, datos: PeticionPosponer):
     prioridad = tarea.get('priority', 0)
     tags_lower = [t.lower() for t in tarea.get('tags', [])]
     
-    # 🧠 SISTEMA DE SCORE: CRITICIDAD
     score_critico = 0
-    
-    # Prioridad explícita del usuario
     if prioridad == 5: score_critico += 10
     if any(t in tags_lower for t in ["medicina", "medicine", "urgente"]): score_critico += 10
-    
-    # Pistas de carpeta
     if any(c in carpeta_lower for c in ["health", "salud", "finanzas", "banco", "pagos"]): score_critico += 2
     
-    # Confirmaciones de título
-    palabras_criticas = ["pagar", "impuesto", "trámite", "tramite", "cita", "médico", "pastilla", "transferir"]
+    palabras_criticas = ["pagar", "impuesto", "tramite", "cita", "medico", "pastilla", "transferir"]
     for w in palabras_criticas:
         if w in titulo_lower: score_critico += 3
         
-    # ANTI FALSOS POSITIVOS (Restamos puntos si es aprendizaje)
     if any(w in titulo_lower for w in ["aprender", "curso", "leer", "estudiar"]): score_critico -= 5
+
+    if carpeta_fue_corregida_como_critica(datos.carpeta):
+        score_critico += 10
     
-    # Umbral de criticidad (Si alcanza 4 o más, no se perdona sola)
     es_critica = score_critico >= 4
-    
     accion_historial = "pospuesta"
     
     if es_recurrente and not es_critica:
-        # Rutina perdonable
         url_complete = f"https://api.ticktick.com/open/v1/project/{proyecto_id}/task/{tarea_id}/complete"
-        requests.post(url_complete, headers=headers)
+        requests.post(url_complete, headers=headers, timeout=10)
         accion_historial = "perdonada"
     else:
-        # Obligación o Crítica
         hoy_local = datetime.now().date()
         manana = hoy_local + timedelta(days=1)
         
@@ -498,26 +528,28 @@ def posponer_tarea(proyecto_id: str, tarea_id: str, datos: PeticionPosponer):
         else:
             tarea['dueDate'] = manana.strftime("%Y-%m-%dT12:00:00+0000")
             
-        requests.post(url_tarea, headers=headers, json=tarea)
+        requests.post(url_tarea, headers=headers, json=tarea, timeout=10)
     
     registrar_interaccion(tarea_id, datos.tarea_nombre, datos.energia, accion_historial, datos.motivo_posponer, datos.carpeta)
     resultado_sesion = "avance_parcial" if "Avance Parcial" in datos.motivo_posponer else "abandono_consciente"
+    cerrar_prediccion_con_resultado(tarea_id, resultado_sesion if accion_historial != "perdonada" else "completada")
     
     conn = sqlite3.connect('atypical_data.db')
     cursor = conn.cursor()
-    # NUEVO: Guardamos la carpeta como contexto
     cursor.execute("INSERT INTO sesiones_tarea (tarea_id, bloqueo_inicial, intervencion_usada, resultado_final, energia, carpeta) VALUES (?, ?, ?, ?, ?, ?)",
             (tarea_id, datos.bloqueo_previo, "Desglose IA" if datos.bloqueo_previo != "Ninguno" else "Ninguna", resultado_sesion, datos.energia, datos.carpeta))
     conn.commit()
     conn.close()
     return {"estado": "exito"}
        
-# Creamos el modelo para recibir el texto de React
 class TareaNueva(BaseModel):
     texto: str
 
 @app.post("/api/captura")
 def captura_rapida(tarea: TareaNueva):
+    if detectar_riesgo(tarea.texto):
+        return respuesta_crisis()
+
     token = obtener_token()
     if not token:
         raise HTTPException(status_code=401, detail="No hay token de acceso")
@@ -527,36 +559,49 @@ def captura_rapida(tarea: TareaNueva):
         "Content-Type": "application/json"
     }
 
-    # API oficial de TickTick para crear tareas (si no le pasas projectId, va al Inbox)
     url_crear = "https://api.ticktick.com/open/v1/task"
-    
-    nueva_tarea = {
-        "title": tarea.texto
-    }
+    nueva_tarea = {"title": tarea.texto}
 
-    respuesta = requests.post(url_crear, headers=headers, json=nueva_tarea)
+    respuesta = requests.post(url_crear, headers=headers, json=nueva_tarea, timeout=10)
 
     if respuesta.status_code == 200:
         return {"estado": "exito", "mensaje": "Capturada en el Inbox"}
     else:
         raise HTTPException(status_code=500, detail="Error al capturar la idea")
-    
-# ---------------------------------------------------------
-# IA: Desglose Clínico con Plantillas Psicológicas (Evolucionado)
-# ---------------------------------------------------------
+
+class PeticionPrediccion(BaseModel):
+    tarea_id: str
+    tarea_nombre: str = "Desconocida"
+    prediccion: str
+    energia: str = "desconocida"
+    carpeta: str = "Inbox"
+
+@app.post("/api/prediccion")
+def guardar_prediccion(datos: PeticionPrediccion):
+    if detectar_riesgo(datos.prediccion):
+        return respuesta_crisis()
+    registrar_prediccion(datos.tarea_id, datos.tarea_nombre, datos.prediccion, datos.energia, datos.carpeta)
+    return {"estado": "exito"}
+
+@app.get("/api/contrastes")
+def ver_contrastes():
+    return {"contrastes": obtener_contrastes_recientes(limite=5)}
 
 class PeticionBloqueo(BaseModel):
-    tarea_id: str = "ID_DESCONOCIDO" # <-- Agregamos el ID
+    tarea_id: str = "ID_DESCONOCIDO"
     titulo_tarea: str
     descripcion_tarea: str = ""
     motivo: str
     energia: str = "desconocida"
     carpeta: str = ""
     etiquetas: list[str] = []
-    patron_historico: str = None # <-- NUEVO: Recibimos la memoria de React
+    patron_historico: str = None
 
 @app.post("/api/desglose")
 def desglose_magico(peticion: PeticionBloqueo):
+    if detectar_riesgo(peticion.motivo):
+        return respuesta_crisis()
+
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
     url_gemini = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
 
@@ -565,7 +610,6 @@ def desglose_magico(peticion: PeticionBloqueo):
     titulo = peticion.titulo_tarea.lower()
     etiquetas_texto = " ".join([t.lower() for t in peticion.etiquetas])
     
-    # 🧠 SISTEMA DE SCORE (HIPÓTESIS)
     score_salud, score_burocracia, score_social = 0, 0, 0
     
     if any(c in carpeta for c in ["health", "salud"]): score_salud += 2
@@ -574,8 +618,8 @@ def desglose_magico(peticion: PeticionBloqueo):
     if "ansiedad" in etiquetas_texto: score_social += 3
     if "pago" in etiquetas_texto: score_burocracia += 3
     
-    if any(w in titulo for w in ["pastilla", "médico", "meds", "cita médica"]): score_salud += 4
-    if any(w in titulo for w in ["pagar", "transferir", "impuesto", "trámite"]): score_burocracia += 4
+    if any(w in titulo for w in ["pastilla", "medico", "meds", "cita medica"]): score_salud += 4
+    if any(w in titulo for w in ["pagar", "transferir", "impuesto", "tramite"]): score_burocracia += 4
     if any(w in titulo for w in ["llamar", "escribir a", "responder", "correo a", "mensaje"]): score_social += 3
     
     if any(w in titulo for w in ["aprender", "curso", "leer", "estudiar"]): 
@@ -586,7 +630,6 @@ def desglose_magico(peticion: PeticionBloqueo):
     es_burocracia = score_burocracia >= 4
     es_ansiedad_social = score_social >= 3
     
-    # REGISTRAMOS LOS SCORES PARA ANALÍTICA FUTURA
     metadata = json.dumps({"score_salud": score_salud, "score_buro": score_burocracia, "score_social": score_social})
     registrar_interaccion(peticion.tarea_id, peticion.titulo_tarea, peticion.energia, "afronto_ansiedad", peticion.motivo, peticion.carpeta, metadata_ia=metadata) 
 
@@ -594,77 +637,79 @@ def desglose_magico(peticion: PeticionBloqueo):
     nombre_intervencion = ""
     
     if es_salud:
-        nombre_intervencion = "Intervención de Salud Física"
-        plantilla_psicologica = "Paso 1: Pon el elemento (vaso/pastilla/teléfono) frente a ti. Paso 2: Ejecuta el movimiento físico básico sin pensarlo. Paso 3: Marca como completado."
+        nombre_intervencion = "Intervencion de Salud Fisica"
+        plantilla_psicologica = "Paso 1: Pon el elemento (vaso/pastilla/telefono) frente a ti. Paso 2: Ejecuta el movimiento fisico basico sin pensarlo. Paso 3: Marca como completado."
     elif es_burocracia:
-        nombre_intervencion = "Reducción de Incertidumbre Financiera"
-        plantilla_psicologica = "Paso 1: Abre la pestaña/app del banco o documento. Paso 2: Mira el monto exacto o la información que falta. Paso 3: Cierra la app o manténla abierta. No tomes ninguna decisión de pago aún."
+        nombre_intervencion = "Reduccion de Incertidumbre Financiera"
+        plantilla_psicologica = "Paso 1: Abre la pestana/app del banco o documento. Paso 2: Mira el monto exacto o la informacion que falta. Paso 3: Cierra la app o mantenla abierta. No tomes ninguna decision de pago aun."
     elif es_ansiedad_social:
-        nombre_intervencion = "Exposición Segura de Comunicación"
-        plantilla_psicologica = "Paso 1: Abre una app de notas donde sea imposible enviar el mensaje por error. Paso 2: Escribe un borrador intencionalmente malo sin formato. Paso 3: Copia el texto y acércate al chat de destino."
+        nombre_intervencion = "Exposicion Segura de Comunicacion"
+        plantilla_psicologica = "Paso 1: Abre una app de notas donde sea imposible enviar el mensaje por error. Paso 2: Escribe un borrador intencionalmente malo sin formato. Paso 3: Copia el texto y acercate al chat de destino."
     elif "perfecto" in motivo or "listo" in motivo:
         nombre_intervencion = "Ruptura de Perfeccionismo"
-        plantilla_psicologica = "Paso 1: Crea un documento o entorno intencionalmente desordenado. Paso 2: Identifica el único requisito que hace que la tarea sea funcional. Paso 3: Escribe o haz la versión más mediocre posible de ese requisito."
+        plantilla_psicologica = "Paso 1: Crea un documento o entorno intencionalmente desordenado. Paso 2: Identifica el unico requisito que hace que la tarea sea funcional. Paso 3: Escribe o haz la version mas mediocre posible de ese requisito."
     elif "empezar" in motivo or "abruma" in motivo or "grande" in motivo:
-        nombre_intervencion = "Reducción de Sobrecarga (Inercia)"
-        plantilla_psicologica = "Paso 1: Ubica tu cuerpo frente al área de trabajo sin intención de trabajar. Paso 2: Ejecuta una acción física absurda (ej. abrir solo 1 enlace). Paso 3: Haz una micro-unidad de trabajo y detente."
+        nombre_intervencion = "Reduccion de Sobrecarga (Inercia)"
+        plantilla_psicologica = "Paso 1: Ubica tu cuerpo frente al area de trabajo sin intencion de trabajar. Paso 2: Ejecuta una accion fisica absurda (ej. abrir solo 1 enlace). Paso 3: Haz una micro-unidad de trabajo y detente."
     elif "ansiedad" in motivo or "miedo" in motivo:
-        nombre_intervencion = "Exposición Conductual"
-        plantilla_psicologica = "Paso 1: Observa la tarea o sus requisitos durante 30 segundos sin intervenir. Paso 2: Nombra en voz alta qué te genera incomodidad. Paso 3: Haz un micro-movimiento de acercamiento."
-    elif "agotado" in motivo or "energía" in motivo:
+        nombre_intervencion = "Exposicion Conductual"
+        plantilla_psicologica = "Paso 1: Observa la tarea o sus requisitos durante 30 segundos sin intervenir. Paso 2: Nombra en voz alta que te genera incomodidad. Paso 3: Haz un micro-movimiento de acercamiento."
+    elif "agotado" in motivo or "energia" in motivo:
         historial_emocion = peticion.patron_historico.lower() if peticion.patron_historico else ""
         if "ansiedad" in historial_emocion or "miedo" in historial_emocion:
-            nombre_intervencion = "Intervención de Activación Amigdalina"
-            plantilla_psicologica = "Paso 1: Reconoce que la pesadez física viene de la tensión, no del sueño. Paso 2: Haz un estiramiento de 5 segundos. Paso 3: Toca el elemento de la tarea y retírate si lo deseas."
+            nombre_intervencion = "Intervencion de Activacion Amigdalina"
+            plantilla_psicologica = "Paso 1: Reconoce que la pesadez fisica viene de la tension, no del sueno. Paso 2: Haz un estiramiento de 5 segundos. Paso 3: Toca el elemento de la tarea y retirate si lo deseas."
         else:
-            nombre_intervencion = "Acomodación a Fricción Física (Agotamiento Real)"
-            # [CORRECCIÓN PSICOLÓGICA]: Evita reforzar la huida automática
-            plantilla_psicologica = "Paso 1: No te muevas de donde estás. Usa tu dispositivo desde tu posición actual. Paso 2: Haz la tarea a un 10% de su calidad normal. Paso 3: Detente después de 2 minutos y decide conscientemente si continúas."
+            nombre_intervencion = "Acomodacion a Friccion Fisica (Agotamiento Real)"
+            plantilla_psicologica = "Paso 1: No te muevas de donde estas. Usa tu dispositivo desde tu posicion actual. Paso 2: Haz la tarea a un 10% de su calidad normal. Paso 3: Detente despues de 2 minutos y decide conscientemente si continuas."
     elif "entiendo" in motivo or "claridad" in motivo:
         nombre_intervencion = "Despeje de Incertidumbre"
-        plantilla_psicologica = "Paso 1: Localiza el punto exacto donde dejaste de entender. Paso 2: Escribe la duda específica en 1 oración. Paso 3: Identifica a quién le puedes preguntar o dónde buscar."
+        plantilla_psicologica = "Paso 1: Localiza el punto exacto donde dejaste de entender. Paso 2: Escribe la duda especifica en 1 oracion. Paso 3: Identifica a quien le puedes preguntar o donde buscar."
     else: 
-        nombre_intervencion = "Activación Estándar"
+        nombre_intervencion = "Activacion Estandar"
         plantilla_psicologica = "Paso 1: Abre los recursos de la tarea. Paso 2: Ejecuta un movimiento motriz relacionado. Paso 3: Parar a los 2 minutos."
 
-    # --- [NUEVO] LA IA APRENDE DE TUS RESULTADOS ---
-    # Obtenemos la mejor estrategia que le ha funcionado a ESTE usuario
+    insight_discrepancia = detectar_discrepancia_motivo(peticion.motivo, peticion.energia)
     mejor_intervencion, peor_intervencion = obtener_efectividad_historica(peticion.motivo, peticion.energia)
 
-    # REGLA 80/20: 80% Explotación (usar lo que sirve) / 20% Exploración (probar cosas nuevas)
     instruccion_adaptativa = ""
-    if random.random() < 0.2:
-        instruccion_adaptativa = "- MODO EXPLORACIÓN (20%): Ignora el historial esta vez. Usa la intervención base u otra que consideres mejor clínicamente. Queremos evaluar nuevas respuestas para evitar sesgos."
-    else:
-        if mejor_intervencion:
-            instruccion_adaptativa += f"\n- LO QUE FUNCIONA (80%): El usuario actúa cuando usas '{mejor_intervencion}'. Replica esta estructura."
-        if peor_intervencion:
-            instruccion_adaptativa += f"\n- EVITAR (80%): Cuando usas '{peor_intervencion}' en este contexto, el usuario se paraliza. Aléjate de ese enfoque."
+    if mejor_intervencion:
+        instruccion_adaptativa += f"\n- LO QUE SI FUNCIONA: El historial muestra que el usuario actua cuando usas '{mejor_intervencion}'. Replica esta estructura."
+    if peor_intervencion:
+        instruccion_adaptativa += f"\n- LO QUE LO BLOQUEA (EVITAR ESTO): Cuando usas '{peor_intervencion}', el usuario se paraliza o abandona. ALEJATE por completo de ese enfoque."
 
     prompt = f"""
-    Eres un entrenador conductual. El usuario está bloqueado:
+    Eres un entrenador conductual. El usuario esta bloqueado:
     - Tarea: "{peticion.titulo_tarea}"
-    - Motivo de fricción: "{peticion.motivo}"
+    - Motivo de friccion: "{peticion.motivo}"
     
-    INTERVENCIÓN BASE: {nombre_intervencion}
-    Lógica a seguir: {plantilla_psicologica}
+    INTERVENCION BASE: {nombre_intervencion}
+    Logica a seguir: {plantilla_psicologica}
     
-    === APRENDIZAJE DEL SISTEMA === 
-    {instruccion_adaptativa}
-    ===============================
+    === APRENDIZAJE DEL SISTEMA (MUY IMPORTANTE) === {instruccion_adaptativa}
+    =================================================
     
-    INSTRUCCIÓN CLÍNICA ESTRICTA (10% CONTEXTO, 90% CONDUCTA):
-    1. CONTEXTO MÍNIMO: Usa máximo UNA oración inicial para validar el motivo.
-    2. CERO REFLEXIÓN: Pide acciones físicas directas.
-    3. El paso 3 DEBE llamarse EXACTAMENTE "Acción de 30 segundos:" seguido de un micro-movimiento.
+    INSTRUCCION CLINICA ESTRICTA (10% CONTEXTO, 90% CONDUCTA):
+    1. CONTEXTO MINIMO: Usa maximo UNA oracion inicial para validar el motivo. (Ej: "Entiendo que organizar facturas abruma.").
+    2. CERO REFLEXION: El sobreanalisis genera paralisis. Pide acciones fisicas directas.
+    3. El paso 3 DEBE llamarse EXACTAMENTE "Accion de 30 segundos:" seguido de un micro-movimiento.
     
     Devuelve EXACTAMENTE este JSON:
-    {{"pasos": ["Oración de contexto. Paso motriz 1", "Paso motriz 2", "Acción de 30 segundos: [Tu instrucción]"]}}
+    {{"pasos": ["Oracion de contexto. Paso motriz 1", "Paso motriz 2", "Accion de 30 segundos: [Tu instruccion]"]}}
     """
+    
+    payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"responseMimeType": "application/json"}}
+    try:
+        respuesta = requests.post(url_gemini, headers={"Content-Type": "application/json"}, json=payload, timeout=15)
+        resultado = json.loads(respuesta.json()['candidates'][0]['content']['parts'][0]['text'])
+        resultado["insight_discrepancia"] = insight_discrepancia
+        return resultado
+    except Exception as e:
+        return {
+            "pasos": ["Abre la aplicacion o documento correspondiente.", "Lee la primera linea u observa el entorno.", "Detente a los 2 minutos y decide si continuar."],
+            "insight_discrepancia": insight_discrepancia
+        }
 
-# ---------------------------------------------------------
-# NUEVA RUTA PARA VER EL HISTORIAL CLÍNICO
-# ---------------------------------------------------------
 @app.get("/api/historial")
 def ver_historial():
     try:
@@ -688,9 +733,6 @@ def ver_sesiones():
     conn.close()
     return {"sesiones_registradas": sesiones}
 
-# ---------------------------------------------------------
-# ANALÍTICA CONDUCTUAL: Tasa de Recuperación
-# ---------------------------------------------------------
 @app.get("/api/metricas-clinicas")
 def obtener_metricas_clinicas():
     try:
@@ -703,7 +745,7 @@ def obtener_metricas_clinicas():
         
         return {
             "recuperaciones_exitosas": recuperaciones_exitosas,
-            "mensaje": f"Has superado {recuperaciones_exitosas} bloqueos que parecían imposibles. Tu historial demuestra que los bloqueos no son permanentes." if recuperaciones_exitosas > 0 else ""
+            "mensaje": f"Has superado {recuperaciones_exitosas} bloqueos que parecian imposibles. Tu historial demuestra que los bloqueos no son permanentes." if recuperaciones_exitosas > 0 else ""
         }
     except Exception as e:
         return {"error": str(e)}
@@ -714,7 +756,6 @@ def espejo_conductual():
         conn = sqlite3.connect('atypical_data.db')
         cursor = conn.cursor()
 
-        # 1. DESGLOSE DE APROXIMACIONES
         cursor.execute("""
             SELECT accion, COUNT(*) FROM interacciones 
             WHERE timestamp >= datetime('now', '-7 days')
@@ -722,9 +763,17 @@ def espejo_conductual():
         """)
         acciones = dict(cursor.fetchall())
         
-        miradas = acciones.get('exposicion_mirar', 0)
-        primeros_pasos = acciones.get('paso1_realizado', 0) + acciones.get('avance_parcial', 0)
-        
+        aproximaciones_reales = (
+            acciones.get('exposicion_mirar', 0) +
+            acciones.get('paso1_comprometido', 0) +
+            acciones.get('paso1_realizado', 0) +
+            acciones.get('avance_parcial', 0) +
+            acciones.get('intento', 0) +
+            acciones.get('afronto_ansiedad', 0)
+        )
+
+        transiciones_logradas = acciones.get('exposicion_mirar', 0) + acciones.get('paso1_comprometido', 0)
+
         cursor.execute("""
             SELECT COUNT(DISTINCT tarea_id) FROM interacciones 
             WHERE accion IN ('completada', 'avance_parcial', 'paso1_realizado') 
@@ -734,78 +783,90 @@ def espejo_conductual():
         """)
         recuperaciones = cursor.fetchone()[0]
 
-        # 2. CÁLCULO DE LATENCIA Y TENDENCIA (Los últimos 14 días separados en 2 semanas)
         cursor.execute("""
-            SELECT tarea_id, accion, timestamp FROM interacciones 
-            WHERE accion IN ('afronto_ansiedad', 'intento', 'exposicion_mirar', 'paso1_realizado', 'avance_parcial', 'completada')
-            AND timestamp >= datetime('now', '-14 days')
-            ORDER BY tarea_id, timestamp
+            SELECT tarea_id, accion, timestamp FROM interacciones
+            WHERE timestamp >= datetime('now', '-7 days')
+            ORDER BY tarea_id, timestamp ASC
         """)
-        rows = cursor.fetchall()
-        
-        latencias_esta_semana = []
-        latencias_semana_pasada = []
-        inicios = {}
-        ahora = datetime.now()
-        
-        for row in rows:
-            t_id, acc, ts_str = row
-            ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
-            if acc in ['afronto_ansiedad', 'intento', 'exposicion_mirar']:
-                if t_id not in inicios:
-                    inicios[t_id] = ts
-            elif acc in ['paso1_realizado', 'avance_parcial', 'completada']:
-                if t_id in inicios:
-                    minutos = (ts - inicios[t_id]).total_seconds() / 60
-                    if 0 < minutos < 1440:  # Máximo 24h
-                        if (ahora - ts).days <= 7:
-                            latencias_esta_semana.append(minutos)
-                        else:
-                            latencias_semana_pasada.append(minutos)
-                    del inicios[t_id]
-                    
-        latencia_actual = round(sum(latencias_esta_semana) / len(latencias_esta_semana)) if latencias_esta_semana else None
-        latencia_pasada = round(sum(latencias_semana_pasada) / len(latencias_semana_pasada)) if latencias_semana_pasada else None
+        filas_friccion = cursor.fetchall()
 
-        tendencia = None
-        if latencia_actual and latencia_pasada:
-            diff = latencia_pasada - latencia_actual
-            if diff > 0:
-                tendencia = f"↓ {diff} minutos menos que la sem. pasada. ¡Mejorando!"
-            elif diff < 0:
-                tendencia = f"↑ {abs(diff)} minutos más que la sem. pasada."
+        bloqueos_atravesados = 0
+        friccion_previa = {}
+        for tarea_id, accion, _ in filas_friccion:
+            if accion in ('intento', 'afronto_ansiedad', 'pidio_ayuda', 'exposicion_mirar', 'paso1_comprometido'):
+                friccion_previa[tarea_id] = friccion_previa.get(tarea_id, 0) + 1
+            elif accion in ('completada', 'avance_parcial', 'paso1_realizado'):
+                if friccion_previa.get(tarea_id, 0) >= 1:
+                    bloqueos_atravesados += 1
+                friccion_previa[tarea_id] = 0
 
-        # 3. IDENTIFICACIÓN DE ANTI-PATRONES (Con n >= 10 para significancia clínica)
         cursor.execute("""
-            SELECT intervencion_usada, bloqueo_inicial, energia
-            FROM sesiones_tarea 
-            WHERE resultado_final IN ('abandono_consciente', 'pospuesta')
-            GROUP BY intervencion_usada, bloqueo_inicial, energia 
-            HAVING COUNT(*) >= 10
-            ORDER BY COUNT(*) DESC LIMIT 1
+            SELECT COUNT(DISTINCT date(timestamp)) FROM interacciones
+            WHERE accion = 'autocuidado' AND timestamp >= datetime('now', '-7 days')
         """)
-        anti_patron = cursor.fetchone()
-        
-        mensaje_anti_patron = None
-        if anti_patron and anti_patron[0] != 'Ninguna':
-            intervencion_fallida, emocion_fallida, energia_fallida = anti_patron[0], anti_patron[1], anti_patron[2]
-            mensaje_anti_patron = f"Se ha observado que el enfoque de '{intervencion_fallida}' tiende a congelarte cuando reportas '{emocion_fallida}' con energía {energia_fallida}. El sistema usará otras rutas a partir de ahora."
+        dias_autocuidado = cursor.fetchone()[0]
 
-        # 4. EVIDENCIA EN LUGAR DE "IDENTIDAD"
-        mensaje_evidencia = f"Durante los últimos 14 días, retomaste {recuperaciones} tareas después de haberlas abandonado. Esto indica una capacidad de recuperación observable en los datos, incluso cuando aparece evitación al principio." if recuperaciones > 0 else "Todavía estamos recopilando datos sobre tu capacidad de retorno a las tareas."
+        patron_detectado = None
+        pospuestas = acciones.get('pospuesta', 0) + acciones.get('rechazada', 0)
+        completadas = acciones.get('completada', 0)
+        ayudas_ia = acciones.get('afronto_ansiedad', 0)
+
+        if pospuestas > (completadas + 5):
+            patron_detectado = {
+                "tipo": "Ciclo de Evitacion",
+                "icono": "🛡️",
+                "mensaje": "Los datos muestran que has pospuesto frecuentemente esta semana. Posponer alivia el malestar por unas horas, pero el costo es que la friccion reaparece manana. Considera usar la regla de 'solo mirar 30 segundos' para romper el ciclo."
+            }
+        elif ayudas_ia > 5 and completadas < 2:
+            patron_detectado = {
+                "tipo": "Exceso de Preparacion",
+                "icono": "⚖️",
+                "mensaje": "Has pedido mucha asistencia pero ejecutado poca accion fisica. Esto suele pasar cuando buscamos sentirnos 'completamente listos' antes de empezar. El objetivo hoy es dar un paso imperfecto o mediocre."
+            }
+
+        cursor.execute("""
+            SELECT carpeta, COUNT(*) as total, 
+                   SUM(CASE WHEN accion IN ('completada', 'avance_parcial', 'paso1_realizado') THEN 1 ELSE 0 END) as exitos
+            FROM interacciones WHERE carpeta != 'Inbox' GROUP BY carpeta HAVING total > 3
+            ORDER BY exitos DESC LIMIT 1
+        """)
+        datos_evidencia = cursor.fetchone()
+        insight_profundo = None
+        
+        if datos_evidencia:
+            tasa = round((datos_evidencia[2] / datos_evidencia[1]) * 100)
+            if tasa >= 50:
+                insight_profundo = f"La sensacion de dificultad suele ser alta con las tareas de '{datos_evidencia[0]}'. Sin embargo, tu historial clinico muestra que cuando decides dar el primer micro-paso fisico, logras avanzar o terminar el {tasa}% de las veces. Tienes la capacidad; el desafio es solo el momento de arranque."
 
         conn.close()
 
+        siguiente_experimento = generar_siguiente_experimento()
+        contrastes_recientes = obtener_contrastes_recientes(limite=3)
+        evidencia_acum = obtener_evidencia_acumulada()
+
         return {
-            "desglose": {
-                "miradas": miradas,
-                "primeros_pasos": primeros_pasos,
-                "retornos": recuperaciones
-            },
-            "latencia": latencia_actual,
-            "tendencia_latencia": tendencia,
-            "anti_patron": mensaje_anti_patron,
-            "evidencia_retorno": mensaje_evidencia
+            "aproximaciones": aproximaciones_reales,
+            "transiciones_logradas": transiciones_logradas,
+            "recuperaciones": recuperaciones,
+            "bloqueos_atravesados": bloqueos_atravesados,
+            "dias_autocuidado": dias_autocuidado,
+            "patron_detectado": patron_detectado,
+            "insight_profundo": insight_profundo,
+            "siguiente_experimento": siguiente_experimento,
+            "contrastes_recientes": contrastes_recientes,
+            "evidencia_acumulada": evidencia_acum
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/autocuidado")
+def registrar_autocuidado(datos: PeticionAutocuidado):
+    registrar_interaccion(
+        tarea_id="autocuidado",
+        tarea_nombre=datos.tipo,
+        energia="baja",
+        accion="autocuidado",
+        emocion=datos.tipo,
+        carpeta="Autocuidado"
+    )
+    return {"estado": "exito"}
