@@ -1,3 +1,4 @@
+# discrepancia_emocional.py
 import sqlite3
 from feedback_discrepancia import fue_rechazada_antes
 

@@ -421,7 +421,11 @@ def corregir_perdon(proyecto_id: str, tarea_id: str, tarea_nombre: str = "Descon
         tarea = requests.get(url_tarea, headers=headers, timeout=10).json()
         tarea['status'] = 0
         hoy = datetime.now().date()
-        tarea['dueDate'] = hoy.strftime("%Y-%m-%dT12:00:00+0000")
+        if 'dueDate' in tarea and not tarea.get('isAllDay', True):
+            hora_original = tarea['dueDate'][10:]
+            tarea['dueDate'] = hoy.strftime("%Y-%m-%d") + hora_original
+        else:
+            tarea['dueDate'] = hoy.strftime("%Y-%m-%dT12:00:00+0000")
         requests.post(url_tarea, headers=headers, json=tarea, timeout=10)
     except requests.exceptions.RequestException as e:
         print(f"Error al corregir perdon en TickTick: {e}")
