@@ -24,6 +24,10 @@ from evidencia_acumulada import obtener_evidencia_acumulada
 from correccion_decisiones import (
     init_tabla_correcciones, registrar_correccion, carpeta_fue_corregida_como_critica
 )
+from espejo_metricas import (
+    calcular_latencia_activacion, calcular_desglose_aproximaciones,
+    construir_anti_patron, construir_evidencia_retorno
+)
 
 from clasificacion_tareas import clasificar_tarea
 from gestion_horario_estricto import (
@@ -859,7 +863,7 @@ def espejo_conductual():
             patron_detectado = {
                 "tipo": "Ciclo de Evitacion",
                 "icono": "🛡️",
-                "mensaje": "Los datos muestran que has pospuesto frecuentemente esta semana. Posponer alivia el malestar por unas horas, pero el costo es que la friccion reaparece manana. Considera usar la regla de 'solo mirar 30 segundos' para romper el ciclo."
+                "mensaje": "Los datos muestran que has pospuesto frecuentemente esta semana. Posponer alivia el malestar por unas horas, pero el costo es que la friccion reaparece mañana. Considera usar la regla de 'solo mirar 30 segundos' para romper el ciclo."
             }
         elif ayudas_ia > 5 and completadas < 2:
             patron_detectado = {
@@ -888,6 +892,13 @@ def espejo_conductual():
         contrastes_recientes = obtener_contrastes_recientes(limite=3)
         evidencia_acum = obtener_evidencia_acumulada()
 
+        # --- NUEVO: campos que mente/page.js esperaba y nunca existieron aquí ---
+        # (ver espejo_metricas.py para el detalle de cada cálculo)
+        latencia, tendencia_latencia = calcular_latencia_activacion()
+        desglose = calcular_desglose_aproximaciones()
+        anti_patron = construir_anti_patron(patron_detectado)
+        evidencia_retorno = construir_evidencia_retorno(insight_profundo, calcular_dias_ausente())
+
         return {
             "aproximaciones": aproximaciones_reales,
             "transiciones_logradas": transiciones_logradas,
@@ -895,7 +906,12 @@ def espejo_conductual():
             "bloqueos_atravesados": bloqueos_atravesados,
             "dias_autocuidado": dias_autocuidado,
             "patron_detectado": patron_detectado,
+            "anti_patron": anti_patron,
             "insight_profundo": insight_profundo,
+            "evidencia_retorno": evidencia_retorno,
+            "latencia": latencia,
+            "tendencia_latencia": tendencia_latencia,
+            "desglose": desglose,
             "siguiente_experimento": siguiente_experimento,
             "contrastes_recientes": contrastes_recientes,
             "evidencia_acumulada": evidencia_acum
