@@ -25,6 +25,14 @@ from correccion_decisiones import (
     init_tabla_correcciones, registrar_correccion, carpeta_fue_corregida_como_critica
 )
 
+from clasificacion_tareas import clasificar_tarea
+from gestion_horario_estricto import (
+    tarea_es_horario_estricto_vencida,
+    procesar_horario_estricto_vencido,
+    es_horario_estricto_recurrente,
+)
+from apscheduler.schedulers.background import BackgroundScheduler
+
 class PeticionAutocuidado(BaseModel):
     tipo: str
 
@@ -235,6 +243,20 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def _job_horario_estricto():
+    token = obtener_token()
+    if not token:
+        print("[scheduler] Sin token, se omite revisión de horario estricto.")
+        return
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    procesadas = procesar_horario_estricto_vencido(headers, {}, registrar_interaccion)
+    if procesadas:
+        print(f"[scheduler] {procesadas} tarea(s) cíclicas marcadas como desconocidas (ocultas localmente).")
+
+scheduler = BackgroundScheduler()
+scheduler.add_job(_job_horario_estricto, "interval", minutes=20, id="horario_estricto")
+scheduler.start()
+
 @app.get("/api/enfoque")
 def obtener_tarea_enfoque(energia: str = "alta"):
     token = obtener_token()
@@ -289,6 +311,16 @@ def obtener_tarea_enfoque(energia: str = "alta"):
     for tarea in todas_las_tareas:
         if tarea.get('status', 0) != 0:
             continue
+        
+        id_proy_tmp = tarea.get('projectId', 'inbox')
+        nombre_carpeta_tmp = mapa_carpetas.get(id_proy_tmp, "Inbox")
+
+        # --- NUEVO: tareas de horario estricto fuera de su margen de gracia ---
+        # No las tratamos como "vencidas con prioridad máxima". El scheduler
+        # en segundo plano ya se encarga de avanzarlas a la siguiente toma;
+        # aquí simplemente no las mostramos como pendientes de hoy.
+        if tarea_es_horario_estricto_vencida(tarea, nombre_carpeta_tmp):
+            continue
 
         tiene_fecha = 'dueDate' in tarea
         mostrar_ahora = True
@@ -328,6 +360,14 @@ def obtener_tarea_enfoque(energia: str = "alta"):
             fecha_t = datetime.strptime(t['dueDate'][:10], "%Y-%m-%d").date()
             if fecha_t < hoy: dias_atraso = (hoy - fecha_t).days
         
+        id_proy_peso = t.get('projectId', 'inbox')
+        nombre_carpeta_peso = mapa_carpetas.get(id_proy_peso, "Inbox")
+        
+        # REGLA DURA: Solo perdonamos el atraso a las tareas RECURRENTES (Tipo A).
+        # Eventos únicos (vuelos, citas médicas aisladas) SÍ acumulan atraso y urgencia.
+        if es_horario_estricto_recurrente(t, nombre_carpeta_peso):
+            dias_atraso = 0
+
         score = 0
         if necesita_calentamiento and energia == "alta": score = (prio * 10) - (dias_atraso * 5)
         elif not necesita_calentamiento and energia == "alta": score = -(prio * 10) - (dias_atraso * 20)
@@ -873,4 +913,135 @@ def registrar_autocuidado(datos: PeticionAutocuidado):
         emocion=datos.tipo,
         carpeta="Autocuidado"
     )
+    return {"estado": "exito"}
+
+# --- Añadir al final de main.py ---
+
+@app.get("/api/cierre-diario")
+def obtener_tareas_cierre():
+    token = obtener_token()
+    if not token: raise HTTPException(status_code=401)
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+
+    url_listas = "https://api.ticktick.com/open/v1/project"
+    try:
+        resp_listas = requests.get(url_listas, headers=headers, timeout=10)
+        listas = resp_listas.json()
+    except:
+        raise HTTPException(status_code=503, detail="Error con TickTick")
+
+    mapa_carpetas = {lista['id']: lista['name'] for lista in listas}
+    mapa_carpetas['inbox'] = "Inbox"
+
+    tareas_cierre = []
+    ahora = datetime.now()
+    hoy = ahora.date()
+
+    for lista in listas:
+        if lista.get('closed') or lista.get('isClosed'): continue
+        nombre_lista = lista.get('name', '').lower()
+        if nombre_lista in ['archivado', 'archived', 'trash']: continue
+        
+        try:
+            url_tareas = f"https://api.ticktick.com/open/v1/project/{lista['id']}/data"
+            resp_tareas = requests.get(url_tareas, headers=headers, timeout=10)
+            if resp_tareas.status_code == 200:
+                todas_las_tareas = resp_tareas.json().get('tasks', [])
+                
+                for t in todas_las_tareas:
+                    if t.get('status', 0) != 0: continue # Solo pendientes
+                    
+                    # Para no agobiar con 30 vencidas, SOLO mostramos tareas cuya fecha sea HOY,
+                    # o que estén vencidas pero tengan prioridad alta (importantes olvidadas).
+                    if 'dueDate' in t:
+                        fecha_tarea = datetime.strptime(t['dueDate'][:10], "%Y-%m-%d").date()
+                        es_hoy = fecha_tarea == hoy
+                        es_atrasada_importante = (fecha_tarea < hoy) and (t.get('priority', 0) > 0)
+                        
+                        if es_hoy or es_atrasada_importante:
+                            id_proy = t.get('projectId', 'inbox')
+                            tareas_cierre.append({
+                                "id": t['id'],
+                                "titulo": t['title'],
+                                "proyecto_id": id_proy,
+                                "carpeta": mapa_carpetas.get(id_proy, "Inbox"),
+                                "es_atrasada": fecha_tarea < hoy,
+                                "es_rutina": bool(t.get('repeatFlag'))
+                            })
+        except:
+            continue
+
+    # Ordenar: primero las de hoy, luego las atrasadas.
+    tareas_cierre.sort(key=lambda x: (x['es_atrasada'], x['titulo']))
+
+    # Limitar a máximo 10 tareas para no generar parálisis
+    return {"tareas": tareas_cierre[:5]}
+
+@app.post("/api/completar-retroactivo/{proyecto_id}/{tarea_id}")
+def completar_retroactivo(proyecto_id: str, tarea_id: str, tarea_nombre: str = "Desconocida", carpeta: str = "Inbox"):
+    """Registra una tarea que el usuario hizo en la vida real, pero olvidó marcar en la app"""
+    token = obtener_token()
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
+    
+    # 1. Completar en TickTick
+    url = f"https://api.ticktick.com/open/v1/project/{proyecto_id}/task/{tarea_id}/complete"
+    requests.post(url, headers=headers, timeout=10)
+    
+    # 2. Registrar en la BD con la nueva métrica
+    registrar_interaccion(tarea_id, tarea_nombre, "desconocida", "completada_fuera_app", "Cierre Diario", carpeta)
+    cerrar_prediccion_con_resultado(tarea_id, "completada_fuera_app")
+    
+    return {"estado": "exito"}
+
+@app.post("/api/posponer-cierre/{proyecto_id}/{tarea_id}")
+def posponer_cierre(proyecto_id: str, tarea_id: str, tarea_nombre: str = "Desconocida", carpeta: str = "Inbox"):
+    """Mueve pacíficamente una tarea a mañana durante el cierre diario"""
+    token = obtener_token()
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    
+    url_tarea = f"https://api.ticktick.com/open/v1/project/{proyecto_id}/task/{tarea_id}"
+    tarea = requests.get(url_tarea, headers=headers, timeout=10).json()
+    
+    hoy_local = datetime.now().date()
+    manana = hoy_local + timedelta(days=1)
+    
+    if 'dueDate' in tarea:
+        if tarea.get('isAllDay', True):
+            tarea['dueDate'] = manana.strftime("%Y-%m-%dT12:00:00+0000")
+        else:
+            hora_original = tarea['dueDate'][10:] 
+            tarea['dueDate'] = manana.strftime("%Y-%m-%d") + hora_original
+            
+    requests.post(url_tarea, headers=headers, json=tarea, timeout=10)
+    
+    registrar_interaccion(tarea_id, tarea_nombre, "desconocida", "pospuesta_cierre", "Sinceridad Nocturna", carpeta)
+    return {"estado": "exito"}
+
+@app.post("/api/olvido-cierre/{proyecto_id}/{tarea_id}")
+def olvido_cierre(proyecto_id: str, tarea_id: str, tarea_nombre: str = "Desconocida", carpeta: str = "Inbox"):
+    """El usuario no recuerda si lo hizo. Se reprograma pacíficamente y se registra el fallo de memoria."""
+    token = obtener_token()
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    
+    url_tarea = f"https://api.ticktick.com/open/v1/project/{proyecto_id}/task/{tarea_id}"
+    try:
+        tarea = requests.get(url_tarea, headers=headers, timeout=10).json()
+        
+        # Movemos a mañana para limpiar el día sin forzar a decir que sí/no
+        hoy_local = datetime.now().date()
+        manana = hoy_local + timedelta(days=1)
+        
+        if 'dueDate' in tarea:
+            if tarea.get('isAllDay', True):
+                tarea['dueDate'] = manana.strftime("%Y-%m-%dT12:00:00+0000")
+            else:
+                hora_original = tarea['dueDate'][10:] 
+                tarea['dueDate'] = manana.strftime("%Y-%m-%d") + hora_original
+                
+        requests.post(url_tarea, headers=headers, json=tarea, timeout=10)
+    except:
+        pass
+    
+    # MÉTRICA CLÍNICA VITAL: Registramos problema de memoria de trabajo, no falta de voluntad
+    registrar_interaccion(tarea_id, tarea_nombre, "desconocida", "no_recuerda", "Cierre Diario", carpeta)
     return {"estado": "exito"}
