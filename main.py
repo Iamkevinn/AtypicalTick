@@ -8,7 +8,21 @@ import re
 from datetime import datetime, timedelta 
 from dotenv import load_dotenv
 import os
+from zoneinfo import ZoneInfo
 import sqlite3
+
+import os
+
+print(os.getpid())
+
+# --- Zona horaria centralizada del proyecto ---
+BOGOTA = ZoneInfo("America/Bogota")
+
+def hace_n_dias_bogota(n: int) -> str:
+    return (datetime.now(BOGOTA) - timedelta(days=n)).strftime("%Y-%m-%d %H:%M:%S")
+
+def hoy_bogota_str() -> str:
+    return datetime.now(BOGOTA).strftime("%Y-%m-%d")
 
 # --- Modulos clinicos separados ---
 from deteccion_crisis import detectar_riesgo, respuesta_crisis
@@ -29,11 +43,14 @@ from espejo_metricas import (
     construir_anti_patron, construir_evidencia_retorno
 )
 
-from clasificacion_tareas import clasificar_tarea
+from clasificacion_tareas import clasificar_tarea, calcular_ventana_visibilidad
 from gestion_horario_estricto import (
     tarea_es_horario_estricto_vencida,
     procesar_horario_estricto_vencido,
     es_horario_estricto_recurrente,
+    init_tabla_lock_horario_estricto,
+    contar_perdidas_consecutivas_salud,
+    _es_critica_salud,
 )
 from apscheduler.schedulers.background import BackgroundScheduler
 
@@ -86,17 +103,18 @@ def init_db():
 
 def registrar_interaccion(tarea_id: str, tarea_nombre: str, energia: str, accion: str, emocion: str = None, carpeta: str = "Inbox", etiquetas: str = "", metadata_ia: str = ""):
     try:
-        ahora = datetime.now()
+        ahora = datetime.now(BOGOTA)
         hora_actual = ahora.hour
         dias = ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado", "Domingo"]
         dia_semana = dias[ahora.weekday()]
+        timestamp_str = ahora.strftime("%Y-%m-%d %H:%M:%S")
 
         conn = sqlite3.connect('atypical_data.db')
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO interacciones (tarea_id, tarea_nombre, energia, emocion_motivo, accion, hora, dia_semana, carpeta, etiquetas, metadata_ia) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (tarea_id, tarea_nombre, energia, emocion, accion, hora_actual, dia_semana, carpeta, etiquetas, metadata_ia))
+            INSERT INTO interacciones (tarea_id, tarea_nombre, energia, emocion_motivo, accion, hora, dia_semana, carpeta, etiquetas, metadata_ia, timestamp) 
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (tarea_id, tarea_nombre, energia, emocion, accion, hora_actual, dia_semana, carpeta, etiquetas, metadata_ia, timestamp_str))
         conn.commit()
         conn.close()
     except Exception as e:
@@ -106,6 +124,7 @@ init_db()
 init_tabla_feedback()
 init_tabla_predicciones()
 init_tabla_correcciones()
+init_tabla_lock_horario_estricto() 
 
 def analizar_perfil_clinico(carpeta: str, etiquetas: list):
     try:
@@ -118,9 +137,9 @@ def analizar_perfil_clinico(carpeta: str, etiquetas: list):
             SELECT emocion_motivo, COUNT(*) FROM interacciones 
             WHERE (carpeta = ? OR (etiquetas != '' AND ? LIKE '%' || etiquetas || '%'))
             AND emocion_motivo IS NOT NULL 
-            AND timestamp >= datetime('now', '-30 days') 
+            AND timestamp >= ? 
             GROUP BY emocion_motivo ORDER BY COUNT(*) DESC
-        """, (carpeta, etiquetas_str))
+        """, (carpeta, etiquetas_str, hace_n_dias_bogota(30)))
         
         resultados = cursor.fetchall()
         conn.close()
@@ -179,8 +198,8 @@ def calcular_dias_ausente():
         conn.close()
         
         if ultima:
-            fecha_ultima = datetime.strptime(ultima[0], "%Y-%m-%d %H:%M:%S")
-            dias = (datetime.utcnow() - fecha_ultima).days 
+            fecha_ultima = datetime.strptime(ultima[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=BOGOTA)
+            dias = (datetime.now(BOGOTA) - fecha_ultima).days
             return max(0, dias)
         return 0
     except: return 0
@@ -191,9 +210,9 @@ def contar_intentos_hoy():
         cursor = conn.cursor()
         cursor.execute("""
             SELECT COUNT(*) FROM interacciones 
-            WHERE accion IN ('intento', 'afronto_ansiedad', 'completada') 
-            AND date(timestamp) = date('now')
-        """)
+            WHERE accion IN ('intento', 'afronto_ansiedad', 'completada', 'paso1_comprometido', 'exposicion_mirar') 
+            AND date(timestamp) = ?
+        """, (hoy_bogota_str(),))
         intentos = cursor.fetchone()[0]
         conn.close()
         return intentos
@@ -207,9 +226,9 @@ def contar_friccion_consecutiva(tarea_id: str):
         cursor = conn.cursor()
         cursor.execute("""
             SELECT accion FROM interacciones 
-            WHERE tarea_id = ? AND date(timestamp) = date('now')
+            WHERE tarea_id = ? AND date(timestamp) = ?
             ORDER BY timestamp DESC
-        """, (tarea_id,))
+        """, (tarea_id, hoy_bogota_str()))
         acciones = cursor.fetchall()
         conn.close()
         
@@ -229,8 +248,8 @@ def fue_perdonada_recientemente(tarea_id: str) -> bool:
         cursor.execute("""
             SELECT COUNT(*) FROM interacciones
             WHERE tarea_id = ? AND accion = 'perdonada'
-            AND timestamp >= datetime('now', '-7 days')
-        """, (tarea_id,))
+            AND timestamp >= ?
+        """, (tarea_id, hace_n_dias_bogota(7)))
         count = cursor.fetchone()[0]
         conn.close()
         return count > 0
@@ -248,6 +267,7 @@ app.add_middleware(
 )
 
 def _job_horario_estricto():
+    print("JOB EJECUTADO")
     token = obtener_token()
     if not token:
         print("[scheduler] Sin token, se omite revisión de horario estricto.")
@@ -258,8 +278,25 @@ def _job_horario_estricto():
         print(f"[scheduler] {procesadas} tarea(s) cíclicas marcadas como desconocidas (ocultas localmente).")
 
 scheduler = BackgroundScheduler()
-scheduler.add_job(_job_horario_estricto, "interval", minutes=20, id="horario_estricto")
+scheduler.add_job(_job_horario_estricto, "interval", minutes=1, id="horario_estricto")
+print("INICIANDO SCHEDULER")
+print(id(scheduler))
 scheduler.start()
+
+
+def _parsear_fecha_ticktick_main(fecha_str: str):
+    """
+    Mismo parseo que usa gestion_horario_estricto._parsear_fecha_ticktick,
+    duplicado aqui para no crear un import circular. Devuelve un datetime
+    con tzinfo (normalmente UTC, segun lo que entrega TickTick), o None
+    si no se pudo parsear.
+    """
+    try:
+        fecha_limpia = re.sub(r'\.\d+', '', fecha_str)
+        return datetime.strptime(fecha_limpia, "%Y-%m-%dT%H:%M:%S%z")
+    except Exception:
+        return None
+
 
 @app.get("/api/enfoque")
 def obtener_tarea_enfoque(energia: str = "alta"):
@@ -303,14 +340,17 @@ def obtener_tarea_enfoque(energia: str = "alta"):
 
     conn = sqlite3.connect('atypical_data.db')
     cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM interacciones WHERE accion='completada' AND date(timestamp) = date('now')")
+    cursor.execute("SELECT COUNT(*) FROM interacciones WHERE accion='completada' AND date(timestamp) = ?", (hoy_bogota_str(),))
     completadas_hoy = cursor.fetchone()[0]
     conn.close()
     
     necesita_calentamiento = completadas_hoy == 0
     tareas_validas = []
-    ahora = datetime.now()
+    info_horario_estricto = {}
+    ahora = datetime.now(BOGOTA)
     hoy = ahora.date()
+    dias_nombres = ["Lunes", "Martes", "Miercoles", "Jueves", "Viernes", "Sabado", "Domingo"]
+    dia_actual = dias_nombres[ahora.weekday()]
 
     for tarea in todas_las_tareas:
         if tarea.get('status', 0) != 0:
@@ -319,12 +359,33 @@ def obtener_tarea_enfoque(energia: str = "alta"):
         id_proy_tmp = tarea.get('projectId', 'inbox')
         nombre_carpeta_tmp = mapa_carpetas.get(id_proy_tmp, "Inbox")
 
-        # --- NUEVO: tareas de horario estricto fuera de su margen de gracia ---
-        # No las tratamos como "vencidas con prioridad máxima". El scheduler
-        # en segundo plano ya se encarga de avanzarlas a la siguiente toma;
-        # aquí simplemente no las mostramos como pendientes de hoy.
-        if tarea_es_horario_estricto_vencida(tarea, nombre_carpeta_tmp):
-            continue
+        es_recurrente_tmp = bool(tarea.get('repeatFlag'))
+        restricciones_tmp = clasificar_tarea(
+            titulo=tarea.get('title', ''),
+            etiquetas=tarea.get('tags', []),
+            carpeta=nombre_carpeta_tmp,
+            tiene_hora_especifica=not tarea.get('isAllDay', True)
+        )
+        es_horario_estricto_tmp = bool(
+            restricciones_tmp.get('hora_importa') and not restricciones_tmp.get('ventana')
+        )
+
+        if es_horario_estricto_tmp and not tarea.get('isAllDay', True) and 'dueDate' in tarea:
+            hora_programada_tmp = _parsear_fecha_ticktick_main(tarea['dueDate'])
+            if hora_programada_tmp:
+                ventana = calcular_ventana_visibilidad(
+                    restricciones_tmp,
+                    es_recurrente=es_recurrente_tmp,
+                    hora_programada=hora_programada_tmp,
+                    reminders=tarea.get('reminders'),
+                    ahora=ahora,
+                )
+                info_horario_estricto[tarea['id']] = {
+                    "activo": ventana["es_horario_estricto_activo"],
+                    "es_salud": _es_critica_salud(tarea, nombre_carpeta_tmp),
+                }
+                if not ventana["visible"]:
+                    continue
 
         tiene_fecha = 'dueDate' in tarea
         mostrar_ahora = True
@@ -335,7 +396,7 @@ def obtener_tarea_enfoque(energia: str = "alta"):
             fecha_tarea = datetime.strptime(fecha_str[:10], "%Y-%m-%d").date()
             if fecha_tarea <= hoy:
                 es_hoy_o_atrasada = True
-                if not tarea.get('isAllDay', True):
+                if not tarea.get('isAllDay', True) and tarea['id'] not in info_horario_estricto:
                     fecha_limpia = re.sub(r'\.\d+', '', fecha_str)
                     hora_tarea = datetime.strptime(fecha_limpia, "%Y-%m-%dT%H:%M:%S%z")
                     if hora_tarea.timestamp() > ahora.timestamp() + 3600:
@@ -349,14 +410,14 @@ def obtener_tarea_enfoque(energia: str = "alta"):
             nombre_carpeta_t = mapa_carpetas.get(id_proy, "Inbox").lower()
             
             es_vital_o_facil = any(palabra in tags_lower for palabra in [
-                "baja-energia", "energia-baja", "facil", "simple", "rutina", "medicine", "medicina"
+                "baja-energia", "energia-baja", "facil", "simple", "rutina", "medicine","Medicine", "medicina"
             ]) or "health" in nombre_carpeta_t or "salud" in nombre_carpeta_t
             
             if tarea.get('priority', 0) == 5 or es_vital_o_facil:
                 tareas_validas.append(tarea)
         else:
             tareas_validas.append(tarea)
-
+    
     def calcular_peso_psicologico(t):
         prio = t.get('priority', 0)
         dias_atraso = 0
@@ -367,8 +428,6 @@ def obtener_tarea_enfoque(energia: str = "alta"):
         id_proy_peso = t.get('projectId', 'inbox')
         nombre_carpeta_peso = mapa_carpetas.get(id_proy_peso, "Inbox")
         
-        # REGLA DURA: Solo perdonamos el atraso a las tareas RECURRENTES (Tipo A).
-        # Eventos únicos (vuelos, citas médicas aisladas) SÍ acumulan atraso y urgencia.
         if es_horario_estricto_recurrente(t, nombre_carpeta_peso):
             dias_atraso = 0
 
@@ -378,10 +437,21 @@ def obtener_tarea_enfoque(energia: str = "alta"):
         else: 
             score = prio * 5
             if dias_atraso > 0 and prio == 5: score -= 50
+
+        info = info_horario_estricto.get(t.get('id'))
+        if info and info.get("activo"):
+            score -= 100000
+
+            if info.get("es_salud"):
+                perdidas = contar_perdidas_consecutivas_salud(t.get('id'))
+                if perdidas >= 2:
+                    score -= 500
+
         return score
 
     dias_ausente = calcular_dias_ausente()
     modo_reingreso = dias_ausente > 7
+
 
     if modo_reingreso:
         def es_muy_atrasada(t):
@@ -401,6 +471,7 @@ def obtener_tarea_enfoque(energia: str = "alta"):
     if not tareas_validas:
         return {"estado": "vacio", "mensaje": "Bandeja limpia por ahora!", "dias_ausente": dias_ausente}
 
+    
     lista_formateada = []
     for t in tareas_validas:
         id_proy = t.get('projectId', 'inbox')
@@ -417,7 +488,9 @@ def obtener_tarea_enfoque(energia: str = "alta"):
             "prioridad": t.get('priority', 0),
             "perfil_clinico": analizar_perfil_clinico(nombre_carpeta, etiquetas),
             "friccion_consecutiva": contar_friccion_consecutiva(t['id']),
-            "fue_auto_perdonada_antes": fue_perdonada_recientemente(t['id'])
+            "fue_auto_perdonada_antes": fue_perdonada_recientemente(t['id']),
+            "patron_emocional": obtener_patron_contextual(nombre_carpeta, dia_actual),
+            "es_horario_estricto_activo": bool(info_horario_estricto.get(t['id'], {}).get("activo"))
         })
 
     return {
@@ -464,7 +537,7 @@ def corregir_perdon(proyecto_id: str, tarea_id: str, tarea_nombre: str = "Descon
     try:
         tarea = requests.get(url_tarea, headers=headers, timeout=10).json()
         tarea['status'] = 0
-        hoy = datetime.now().date()
+        hoy = datetime.now(BOGOTA).date()
         if 'dueDate' in tarea and not tarea.get('isAllDay', True):
             hora_original = tarea['dueDate'][10:]
             tarea['dueDate'] = hoy.strftime("%Y-%m-%d") + hora_original
@@ -500,7 +573,7 @@ def registrar_intento_valiente(tarea_id: str, accion: str = "intento", tarea_nom
     return {"estado": "exito"}
 
 @app.post("/api/liberar/{proyecto_id}/{tarea_id}")
-def liberar_tarea(proyecto_id: str, tarea_id: str, tarea_nombre: str = "Desconocida", energia: str = "desconocida", carpeta: str = "Inbox", bloqueo_previo: str = "Ninguno"):
+def liberar_tarea(proyecto_id: str, tarea_id: str, tarea_nombre: str = "Desconocida", energia: str = "desconocida", carpeta: str = "Inbox", bloqueo_previo: str = "Ninguno", intervencion_usada: str = "Ninguna"):
     token = obtener_token()
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     respuesta = requests.post(f"https://api.ticktick.com/open/v1/project/{proyecto_id}/task/{tarea_id}/complete", headers=headers, timeout=10)
@@ -511,8 +584,8 @@ def liberar_tarea(proyecto_id: str, tarea_id: str, tarea_nombre: str = "Desconoc
         
         conn = sqlite3.connect('atypical_data.db')
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO sesiones_tarea (tarea_id, bloqueo_inicial, intervencion_usada, resultado_final, energia, carpeta) VALUES (?, ?, ?, ?, ?, ?)",
-              (tarea_id, bloqueo_previo, "Desglose IA" if bloqueo_previo != "Ninguno" else "Ninguna", "completada", energia, carpeta))
+        cursor.execute("INSERT INTO sesiones_tarea (tarea_id, bloqueo_inicial, intervencion_usada, resultado_final, energia, carpeta, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+              (tarea_id, bloqueo_previo, intervencion_usada, "completada", energia, carpeta, datetime.now(BOGOTA).strftime("%Y-%m-%d %H:%M:%S")))
         conn.commit()
         conn.close()
         return {"estado": "exito"}
@@ -523,7 +596,8 @@ class PeticionPosponer(BaseModel):
     energia: str = "desconocida"
     carpeta: str = "Inbox"
     motivo_posponer: str = "Sin motivo"
-    bloqueo_previo: str = "Ninguno"
+    bloqueo_previo: str = "Ninguno",
+    intervencion_usada: str = "Ninguna"
 
 @app.post("/api/posponer/{proyecto_id}/{tarea_id}")
 def posponer_tarea(proyecto_id: str, tarea_id: str, datos: PeticionPosponer):
@@ -564,7 +638,7 @@ def posponer_tarea(proyecto_id: str, tarea_id: str, datos: PeticionPosponer):
         requests.post(url_complete, headers=headers, timeout=10)
         accion_historial = "perdonada"
     else:
-        hoy_local = datetime.now().date()
+        hoy_local = datetime.now(BOGOTA).date()
         manana = hoy_local + timedelta(days=1)
         
         if 'dueDate' in tarea:
@@ -584,8 +658,8 @@ def posponer_tarea(proyecto_id: str, tarea_id: str, datos: PeticionPosponer):
     
     conn = sqlite3.connect('atypical_data.db')
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO sesiones_tarea (tarea_id, bloqueo_inicial, intervencion_usada, resultado_final, energia, carpeta) VALUES (?, ?, ?, ?, ?, ?)",
-            (tarea_id, datos.bloqueo_previo, "Desglose IA" if datos.bloqueo_previo != "Ninguno" else "Ninguna", resultado_sesion, datos.energia, datos.carpeta))
+    cursor.execute("INSERT INTO sesiones_tarea (tarea_id, bloqueo_inicial, intervencion_usada, resultado_final, energia, carpeta, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (tarea_id, datos.bloqueo_previo, datos.intervencion_usada, resultado_sesion, datos.energia, datos.carpeta, datetime.now(BOGOTA).strftime("%Y-%m-%d %H:%M:%S")))
     conn.commit()
     conn.close()
     return {"estado": "exito"}
@@ -751,11 +825,13 @@ def desglose_magico(peticion: PeticionBloqueo):
         respuesta = requests.post(url_gemini, headers={"Content-Type": "application/json"}, json=payload, timeout=15)
         resultado = json.loads(respuesta.json()['candidates'][0]['content']['parts'][0]['text'])
         resultado["insight_discrepancia"] = insight_discrepancia
+        resultado["nombre_intervencion"] = nombre_intervencion
         return resultado
     except Exception as e:
         return {
             "pasos": ["Abre la aplicacion o documento correspondiente.", "Lee la primera linea u observa el entorno.", "Detente a los 2 minutos y decide si continuar."],
-            "insight_discrepancia": insight_discrepancia
+            "insight_discrepancia": insight_discrepancia,
+            "nombre_intervencion": nombre_intervencion
         }
 
 @app.get("/api/historial")
@@ -803,12 +879,13 @@ def espejo_conductual():
     try:
         conn = sqlite3.connect('atypical_data.db')
         cursor = conn.cursor()
+        hace_7_dias = hace_n_dias_bogota(7)
 
         cursor.execute("""
             SELECT accion, COUNT(*) FROM interacciones 
-            WHERE timestamp >= datetime('now', '-7 days')
+            WHERE timestamp >= ?
             GROUP BY accion
-        """)
+        """, (hace_7_dias,))
         acciones = dict(cursor.fetchall())
         
         aproximaciones_reales = (
@@ -833,9 +910,9 @@ def espejo_conductual():
 
         cursor.execute("""
             SELECT tarea_id, accion, timestamp FROM interacciones
-            WHERE timestamp >= datetime('now', '-7 days')
+            WHERE timestamp >= ?
             ORDER BY tarea_id, timestamp ASC
-        """)
+        """, (hace_7_dias,))
         filas_friccion = cursor.fetchall()
 
         bloqueos_atravesados = 0
@@ -850,8 +927,8 @@ def espejo_conductual():
 
         cursor.execute("""
             SELECT COUNT(DISTINCT date(timestamp)) FROM interacciones
-            WHERE accion = 'autocuidado' AND timestamp >= datetime('now', '-7 days')
-        """)
+            WHERE accion = 'autocuidado' AND timestamp >= ?
+        """, (hace_7_dias,))
         dias_autocuidado = cursor.fetchone()[0]
 
         patron_detectado = None
@@ -892,8 +969,6 @@ def espejo_conductual():
         contrastes_recientes = obtener_contrastes_recientes(limite=3)
         evidencia_acum = obtener_evidencia_acumulada()
 
-        # --- NUEVO: campos que mente/page.js esperaba y nunca existieron aquí ---
-        # (ver espejo_metricas.py para el detalle de cada cálculo)
         latencia, tendencia_latencia = calcular_latencia_activacion()
         desglose = calcular_desglose_aproximaciones()
         anti_patron = construir_anti_patron(patron_detectado)
@@ -950,7 +1025,7 @@ def obtener_tareas_cierre():
     mapa_carpetas['inbox'] = "Inbox"
 
     tareas_cierre = []
-    ahora = datetime.now()
+    ahora = datetime.now(BOGOTA)
     hoy = ahora.date()
 
     for lista in listas:
@@ -965,10 +1040,8 @@ def obtener_tareas_cierre():
                 todas_las_tareas = resp_tareas.json().get('tasks', [])
                 
                 for t in todas_las_tareas:
-                    if t.get('status', 0) != 0: continue # Solo pendientes
+                    if t.get('status', 0) != 0: continue
                     
-                    # Para no agobiar con 30 vencidas, SOLO mostramos tareas cuya fecha sea HOY,
-                    # o que estén vencidas pero tengan prioridad alta (importantes olvidadas).
                     if 'dueDate' in t:
                         fecha_tarea = datetime.strptime(t['dueDate'][:10], "%Y-%m-%d").date()
                         es_hoy = fecha_tarea == hoy
@@ -987,10 +1060,8 @@ def obtener_tareas_cierre():
         except:
             continue
 
-    # Ordenar: primero las de hoy, luego las atrasadas.
     tareas_cierre.sort(key=lambda x: (x['es_atrasada'], x['titulo']))
 
-    # Limitar a máximo 10 tareas para no generar parálisis
     return {"tareas": tareas_cierre[:5]}
 
 @app.post("/api/completar-retroactivo/{proyecto_id}/{tarea_id}")
@@ -999,11 +1070,9 @@ def completar_retroactivo(proyecto_id: str, tarea_id: str, tarea_nombre: str = "
     token = obtener_token()
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     
-    # 1. Completar en TickTick
     url = f"https://api.ticktick.com/open/v1/project/{proyecto_id}/task/{tarea_id}/complete"
     requests.post(url, headers=headers, timeout=10)
     
-    # 2. Registrar en la BD con la nueva métrica
     registrar_interaccion(tarea_id, tarea_nombre, "desconocida", "completada_fuera_app", "Cierre Diario", carpeta)
     cerrar_prediccion_con_resultado(tarea_id, "completada_fuera_app")
     
@@ -1018,7 +1087,7 @@ def posponer_cierre(proyecto_id: str, tarea_id: str, tarea_nombre: str = "Descon
     url_tarea = f"https://api.ticktick.com/open/v1/project/{proyecto_id}/task/{tarea_id}"
     tarea = requests.get(url_tarea, headers=headers, timeout=10).json()
     
-    hoy_local = datetime.now().date()
+    hoy_local = datetime.now(BOGOTA).date()
     manana = hoy_local + timedelta(days=1)
     
     if 'dueDate' in tarea:
@@ -1043,8 +1112,7 @@ def olvido_cierre(proyecto_id: str, tarea_id: str, tarea_nombre: str = "Desconoc
     try:
         tarea = requests.get(url_tarea, headers=headers, timeout=10).json()
         
-        # Movemos a mañana para limpiar el día sin forzar a decir que sí/no
-        hoy_local = datetime.now().date()
+        hoy_local = datetime.now(BOGOTA).date()
         manana = hoy_local + timedelta(days=1)
         
         if 'dueDate' in tarea:
@@ -1058,6 +1126,22 @@ def olvido_cierre(proyecto_id: str, tarea_id: str, tarea_nombre: str = "Desconoc
     except:
         pass
     
-    # MÉTRICA CLÍNICA VITAL: Registramos problema de memoria de trabajo, no falta de voluntad
     registrar_interaccion(tarea_id, tarea_nombre, "desconocida", "no_recuerda", "Cierre Diario", carpeta)
     return {"estado": "exito"}
+
+@app.get("/api/test-horario")
+def test_horario():
+    token = obtener_token()
+
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json"
+    }
+
+    return {
+        "procesadas": procesar_horario_estricto_vencido(
+            headers,
+            {},
+            registrar_interaccion
+        )
+    }

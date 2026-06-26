@@ -1,26 +1,24 @@
 # espejo_metricas.py
-# ---------------------------------------------------------
-# BUG QUE ESTO ARREGLA:
-# mente/page.js (pantalla "Mi Mente") leía espejo.latencia,
-# espejo.tendencia_latencia, espejo.desglose.{miradas,
-# primeros_pasos,retornos}, espejo.anti_patron y
-# espejo.evidencia_retorno. Ninguno de esos campos existía en
-# la respuesta real de /api/espejo-conductual, así que esas
-# secciones nunca se renderizaban (el condicional `{x && (...)}`
-# las ocultaba en silencio, sin error visible).
-#
-# Este módulo calcula esos campos a partir de datos que YA
-# existen en `interacciones` — cero columnas nuevas, cero
-# inferencia que el usuario no haya generado con sus propias
-# acciones (mismo principio que el resto del proyecto).
-# ---------------------------------------------------------
-
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+# --- Zona horaria centralizada (ver main.py) ---
+# Las filas de "interacciones" ahora guardan su timestamp en hora
+# Bogota (registrar_interaccion en main.py lo inserta explicitamente).
+# Por eso aqui calculamos el limite de "hace N dias" tambien en
+# Bogota, en vez de usar datetime('now', ...) de SQLite — que siempre
+# calcula en UTC y desalinearia la ventana de busqueda contra los
+# timestamps ya guardados en Bogota.
+BOGOTA = ZoneInfo("America/Bogota")
 
 ACCIONES_FRICCION = ('intento', 'afronto_ansiedad', 'pidio_ayuda', 'exposicion_mirar', 'paso1_comprometido')
 ACCIONES_MOVIMIENTO = ('completada', 'avance_parcial', 'paso1_realizado')
 ACCIONES_RETIRADA = ('rechazada', 'pospuesta', 'abandono_consciente')
+
+
+def _hace_n_dias_bogota(n: int) -> str:
+    return (datetime.now(BOGOTA) - timedelta(days=n)).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def calcular_latencia_activacion(dias: int = 14):
@@ -39,9 +37,9 @@ def calcular_latencia_activacion(dias: int = 14):
         cursor = conn.cursor()
         cursor.execute("""
             SELECT tarea_id, accion, timestamp FROM interacciones
-            WHERE timestamp >= datetime('now', ? || ' days')
+            WHERE timestamp >= ?
             ORDER BY tarea_id, timestamp ASC
-        """, (f"-{dias}",))
+        """, (_hace_n_dias_bogota(dias),))
         filas = cursor.fetchall()
         conn.close()
 
@@ -100,19 +98,20 @@ def calcular_desglose_aproximaciones(dias: int = 7):
     try:
         conn = sqlite3.connect('atypical_data.db')
         cursor = conn.cursor()
+        limite = _hace_n_dias_bogota(dias)
 
         cursor.execute("""
             SELECT accion, COUNT(*) FROM interacciones
-            WHERE timestamp >= datetime('now', ? || ' days')
+            WHERE timestamp >= ?
             GROUP BY accion
-        """, (f"-{dias}",))
+        """, (limite,))
         acciones = dict(cursor.fetchall())
 
         cursor.execute("""
             SELECT tarea_id, accion, timestamp FROM interacciones
-            WHERE timestamp >= datetime('now', ? || ' days')
+            WHERE timestamp >= ?
             ORDER BY tarea_id, timestamp ASC
-        """, (f"-{dias}",))
+        """, (limite,))
         filas = cursor.fetchall()
         conn.close()
 

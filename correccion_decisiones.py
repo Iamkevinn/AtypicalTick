@@ -1,21 +1,10 @@
 # correccion_decisiones.py
-# ---------------------------------------------------------
-# Canal de corrección GENÉRICO para decisiones que el sistema
-# toma sin preguntar (perdón automático de rutinas, scoring de
-# criticidad al posponer, clasificación de perfil clínico, y ahora
-# también: clasificación automática de restricciones de tarea).
-#
-# Diseño: en vez de un botón distinto por cada tipo de decisión,
-# una sola tabla con un campo "tipo_decision" que identifica
-# QUÉ se está corrigiendo, y una respuesta CERRADA (no texto libre),
-# para no generar otra superficie de riesgo ni pedirle al usuario
-# trabajo cognitivo extra en un momento de fricción.
-#
-# Regla dura: todo dato es generado por el propio usuario al
-# tocar un botón. Nada se infiere ni se asume.
-# ---------------------------------------------------------
-
 import sqlite3
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+# --- Zona horaria centralizada (ver main.py) ---
+BOGOTA = ZoneInfo("America/Bogota")
 
 
 def init_tabla_correcciones():
@@ -26,10 +15,9 @@ def init_tabla_correcciones():
         CREATE TABLE IF NOT EXISTS correcciones_usuario (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             tarea_id TEXT,
-            tipo_decision TEXT,     -- ej: 'perdon_rutina', 'criticidad_posponer',
-                                     -- 'perfil_clinico', 'clasificacion_tarea'
-            valor_original TEXT,    -- lo que el sistema decidió (ej: 'perdonada', 'no_critica')
-            correccion TEXT,        -- la opción cerrada que el usuario eligió
+            tipo_decision TEXT,
+            valor_original TEXT,
+            correccion TEXT,
             carpeta TEXT,
             timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
         )
@@ -43,9 +31,9 @@ def registrar_correccion(tarea_id: str, tipo_decision: str, valor_original: str,
         conn = sqlite3.connect('atypical_data.db')
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO correcciones_usuario (tarea_id, tipo_decision, valor_original, correccion, carpeta)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (tarea_id, tipo_decision, valor_original, correccion, carpeta))
+            INSERT INTO correcciones_usuario (tarea_id, tipo_decision, valor_original, correccion, carpeta, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (tarea_id, tipo_decision, valor_original, correccion, carpeta, datetime.now(BOGOTA).strftime("%Y-%m-%d %H:%M:%S")))
         conn.commit()
         conn.close()
         return True
@@ -55,13 +43,6 @@ def registrar_correccion(tarea_id: str, tipo_decision: str, valor_original: str,
 
 
 def carpeta_fue_corregida_como_critica(carpeta: str) -> bool:
-    """
-    Si el usuario ya corrigió 2+ veces que tareas de esta carpeta
-    SÍ eran críticas (cuando el sistema las trató como perdonables),
-    el sistema debe dejar de perdonarlas automáticamente en esa carpeta.
-    Esto es una salvaguarda real basada en corrección explícita repetida,
-    no una suposición.
-    """
     try:
         conn = sqlite3.connect('atypical_data.db')
         cursor = conn.cursor()
@@ -78,15 +59,7 @@ def carpeta_fue_corregida_como_critica(carpeta: str) -> bool:
         return False
 
 
-# --- NUEVO: confirmación única de la clasificación automática de restricciones ---
-
 def clasificacion_ya_fue_preguntada(tarea_id: str) -> bool:
-    """
-    True si ya se le preguntó al usuario sobre la clasificación
-    automática de ESTA tarea (la haya confirmado o rechazado).
-    Evita volver a preguntar cada vez que la tarea aparece en /enfoque
-    — se pregunta como máximo una vez por tarea, nunca más.
-    """
     try:
         conn = sqlite3.connect('atypical_data.db')
         cursor = conn.cursor()
@@ -102,12 +75,6 @@ def clasificacion_ya_fue_preguntada(tarea_id: str) -> bool:
 
 
 def clasificacion_fue_rechazada(tarea_id: str) -> bool:
-    """
-    True si, al preguntarle, el usuario dijo que la clasificación
-    automática NO era correcta. En ese caso main.py debe tratar la
-    tarea como sin restricciones (flexible) de ahí en adelante —
-    el sistema se corrige solo, sin pedirle nada más a la persona.
-    """
     try:
         conn = sqlite3.connect('atypical_data.db')
         cursor = conn.cursor()

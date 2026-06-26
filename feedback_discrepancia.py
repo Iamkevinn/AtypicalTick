@@ -1,5 +1,11 @@
 # feedback_discrepancia.py
 import sqlite3
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+# --- Zona horaria centralizada (ver main.py) ---
+BOGOTA = ZoneInfo("America/Bogota")
+
 
 def init_tabla_feedback():
     conn = sqlite3.connect('atypical_data.db')
@@ -17,18 +23,20 @@ def init_tabla_feedback():
     conn.commit()
     conn.close()
 
+
 def registrar_feedback_discrepancia(motivo_declarado: str, energia: str, intervencion_sugerida: str, respuesta: str):
     try:
         conn = sqlite3.connect('atypical_data.db')
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO feedback_discrepancia (motivo_declarado, energia, intervencion_sugerida, respuesta)
-            VALUES (?, ?, ?, ?)
-        ''', (motivo_declarado, energia, intervencion_sugerida, respuesta))
+            INSERT INTO feedback_discrepancia (motivo_declarado, energia, intervencion_sugerida, respuesta, timestamp)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (motivo_declarado, energia, intervencion_sugerida, respuesta, datetime.now(BOGOTA).strftime("%Y-%m-%d %H:%M:%S")))
         conn.commit()
         conn.close()
     except Exception as e:
         print("🚨 Error al guardar feedback de discrepancia:", e)
+
 
 def fue_rechazada_antes(motivo_declarado: str, energia: str, intervencion_sugerida: str) -> bool:
     try:
@@ -41,8 +49,7 @@ def fue_rechazada_antes(motivo_declarado: str, energia: str, intervencion_sugeri
         ''', (motivo_declarado, energia, intervencion_sugerida))
         fila = cursor.fetchone()
         conn.close()
-        
-        # Si el último feedback para esta combinación fue "no_es_eso", respetamos el rechazo
+
         if fila and fila[0] == 'no_es_eso':
             return True
         return False

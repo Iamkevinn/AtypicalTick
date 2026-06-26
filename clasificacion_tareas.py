@@ -1,35 +1,17 @@
-# clasificacion_tareas.py
-# ---------------------------------------------------------
-# RESTRICCIONES DE CONDUCTA, NO "TIPOS DE TAREA"
-# ---------------------------------------------------------
-# v2: reemplaza el modelo de 4 categorías cerradas (rígida/
-# semirrígida/flexible/ritual) por restricciones COMPONIBLES.
-# Motivo: una tarea puede tener más de una restricción a la vez
-# (ej. "tomar vitamina después de desayunar" depende de contexto
-# Y de una ventana horaria suave). Forzarla a una sola categoría
-# pierde o distorsiona esa información.
-#
-# Restricciones:
-#   hora_importa:      ¿el momento exacto del reloj importa?
-#   ventana:           si hora_importa=True, ventana válida
-#                       (None = la hora debe ser exacta, sin margen)
-#   contexto_importa:  ¿depende de un disparador situacional
-#                       (despertar, antes de dormir) más que del reloj?
-#   contexto_ideal:    cuál disparador, si contexto_importa=True
-#
-# REGLA DE DISEÑO (no negociable): el usuario NUNCA necesita
-# clasificar nada para que esto funcione. Todo parte de inferencia
-# automática sobre datos que YA existen (título, carpeta, si la
-# tarea tiene hora específica puesta en TickTick — eso ya es una
-# señal gratuita de que la hora le importó a la persona al crearla).
-# Los tags (#rigida, #ritual, #ctx-despertar, #ventana-7-11) siguen
-# soportados, pero solo como override de casos especiales — nunca
-# como requisito. Si el usuario nunca toca un tag, el sistema debe
-# funcionar igual de bien.
-# ---------------------------------------------------------
-
+# clasificación_tareas.py
 import re
-from datetime import datetime, time
+import re as _re_trigger
+from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
+
+# --- Zona horaria centralizada (ver main.py) ---
+# Las ventanas de CONTEXTOS_VALIDOS (ej. "al_despertar" = 4am-11am)
+# estan pensadas en hora real de Bogota. esta_en_ventana_valida()
+# usaba datetime.now() (hora naive del servidor) como default cuando
+# no se le pasaba "momento" explicitamente, lo que comparaba esas
+# ventanas contra una hora que podia estar desfasada varias horas
+# si el servidor corre en UTC u otra zona.
+BOGOTA = ZoneInfo("America/Bogota")
 
 PALABRAS_HORA_FUERTE = [
     "pastilla", "medicamento", "medicina", "dosis", "inyeccion", "inyección",
@@ -54,18 +36,21 @@ CONTEXTOS_VALIDOS = {
 
 PATRON_VENTANA = re.compile(r"^ventana-(\d{1,2})-(\d{1,2})$")
 PATRON_CONTEXTO_TAG = re.compile(r"^ctx-([a-z_]+)$")
+PATRON_MARGEN = re.compile(r"^margen-(\d{1,4})$")  # ej "margen-30" = 30 min de gracia
 
+# Antes esto SIEMPRE caia en 120 sin importar el tipo de tarea, porque
+# clasificar_tarea() nunca devolvia esta clave. Diferenciamos por fuente:
+# las señales fuertes (medicamentos, citas, vuelos) merecen un margen mas
+# corto porque la precision importa mas; las señales debiles, uno mas largo.
+MARGENES_POR_FUENTE = {
+    "tag_explicito": 90,
+    "inferido_fuerte": 60,
+    "inferido_debil": 180,
+}
+MARGEN_MINUTOS_DEFAULT = 120
 
 def clasificar_tarea(titulo: str, etiquetas: list = None, carpeta: str = "",
                       tiene_hora_especifica: bool = False) -> dict:
-    """
-    Inferencia automática, cero configuración requerida.
-
-    'tiene_hora_especifica' = True si en TickTick la tarea NO es
-    'isAllDay' (el usuario ya puso una hora concreta). Eso es en sí
-    mismo una señal gratuita de que la hora le importa — sin que el
-    usuario tenga que etiquetar nada.
-    """
     tags = [t.lower().strip() for t in (etiquetas or [])]
     titulo_lower = (titulo or "").lower()
     carpeta_lower = (carpeta or "").lower()
@@ -75,6 +60,15 @@ def clasificar_tarea(titulo: str, etiquetas: list = None, carpeta: str = "",
         "contexto_importa": False, "contexto_ideal": None,
         "confianza": "ninguna", "fuente": "default",
     }
+
+    margen_explicito = None  # tag "margen-N", si el usuario lo puso
+
+    def _finalizar(r: dict) -> dict:
+        r["margen_minutos"] = (
+            margen_explicito if margen_explicito is not None
+            else MARGENES_POR_FUENTE.get(r.get("fuente"), MARGEN_MINUTOS_DEFAULT)
+        )
+        return r
 
     # --- 1. Tags explícitos: override de casos especiales (OPCIONAL) ---
     hubo_tag = False
@@ -90,6 +84,9 @@ def clasificar_tarea(titulo: str, etiquetas: list = None, carpeta: str = "",
             resultado.update(contexto_importa=True, contexto_ideal=m2.group(1),
                               confianza="alta", fuente="tag_explicito")
             hubo_tag = True
+        m3 = PATRON_MARGEN.match(tag)
+        if m3:
+            margen_explicito = int(m3.group(1))
     if "rigida" in tags:
         resultado.update(hora_importa=True, ventana=None, confianza="alta", fuente="tag_explicito")
         hubo_tag = True
@@ -98,40 +95,36 @@ def clasificar_tarea(titulo: str, etiquetas: list = None, carpeta: str = "",
                           confianza="alta", fuente="tag_explicito")
         hubo_tag = True
     if "flexible" in tags:
-        return {"hora_importa": False, "ventana": None, "contexto_importa": False,
-                "contexto_ideal": None, "confianza": "alta", "fuente": "tag_explicito"}
+        return _finalizar({"hora_importa": False, "ventana": None, "contexto_importa": False,
+                            "contexto_ideal": None, "confianza": "alta", "fuente": "tag_explicito"})
 
     if hubo_tag:
-        return resultado  # el tag manda; no seguimos infiriendo encima
+        return _finalizar(resultado)
 
-    # --- 2. Inferencia automática (esto hace el trabajo pesado SIEMPRE) ---
+    # --- 2. Inferencia automática ---
     if any(p in titulo_lower for p in PALABRAS_HORA_FUERTE):
         resultado.update(hora_importa=True, ventana=None, confianza="alta", fuente="inferido_fuerte")
-        return resultado
+        return _finalizar(resultado)
 
     for contexto, palabras in PALABRAS_CONTEXTO.items():
         if any(p in titulo_lower for p in palabras):
             resultado.update(contexto_importa=True, contexto_ideal=contexto,
                               confianza="alta", fuente="inferido_fuerte")
-            return resultado
+            return _finalizar(resultado)
 
-    # Señal media: carpeta sensible (salud/finanzas) + ya tiene hora puesta en TickTick.
-    # No necesitamos palabras clave aquí: si la persona YA puso una hora exacta
-    # en una tarea de Salud o Finanzas, eso ya es evidencia suficiente.
     es_carpeta_sensible = any(c in carpeta_lower for c in CARPETAS_SALUD + CARPETAS_FINANZAS)
     if tiene_hora_especifica and es_carpeta_sensible:
         resultado.update(hora_importa=True, ventana=None, confianza="media", fuente="inferido_debil")
-        return resultado
+        return _finalizar(resultado)
 
     if any(p in titulo_lower for p in PALABRAS_HORA_MEDIA) and tiene_hora_especifica:
         resultado.update(hora_importa=True, ventana=None, confianza="media", fuente="inferido_debil")
-        return resultado
+        return _finalizar(resultado)
 
-    return resultado  # default: sin restricciones — NUNCA restringimos sin evidencia
-
+    return _finalizar(resultado)
 
 def esta_en_ventana_valida(restricciones: dict, momento: datetime = None) -> bool:
-    momento = momento or datetime.now()
+    momento = momento or datetime.now(BOGOTA)
     hora_actual = momento.time()
 
     if restricciones.get("hora_importa") and restricciones.get("ventana"):
@@ -177,3 +170,118 @@ def necesita_confirmacion_unica(restricciones: dict) -> bool:
     """
     hay_restriccion = restricciones.get("hora_importa") or restricciones.get("contexto_importa")
     return bool(hay_restriccion) and restricciones.get("fuente") in ("inferido_fuerte", "inferido_debil")
+
+def calcular_ventana_visibilidad(restricciones: dict, es_recurrente: bool,
+                                   hora_programada: datetime, ahora: datetime = None) -> dict:
+    """
+    Decide si una tarea de horario estricto (hora_importa=True, ventana=None)
+    debe ser VISIBLE en /api/enfoque en este momento, y si debe recibir el
+    boost de "imnencia activa" en el score.
+
+    Dos perfiles distintos, según si la tarea es recurrente (Tipo A: rutina,
+    pastilla diaria) o evento único (Tipo B: cita médica, vuelo):
+
+    - RECURRENTE: visible solo en [hora_programada, hora_programada + margen].
+      Antes de su hora: oculta (no tiene sentido recordar una pastilla 4h antes).
+      Después del margen: oculta también — el scheduler en background ya la
+      completa/salta sola (gestion_horario_estricto.py), así que nunca debería
+      llegar a este punto realmente, pero por seguridad la ocultamos igual.
+
+    - EVENTO ÚNICO: visible desde [hora_programada - margen] (para darte tiempo
+      de prepararte, ej. 3h antes de una cita) y se queda visible indefinidamente
+      después de la hora — incluyendo días de atraso — porque NUNCA se auto-
+      completa ni se auto-perdona. El score ya penaliza esto por separado
+      vía dias_atraso en calcular_peso_psicologico.
+
+    Devuelve:
+        {
+            "visible": bool,
+            "es_horario_estricto_activo": bool  # dispara el boost de prioridad máxima
+        }
+    """
+    ahora = ahora or datetime.now(BOGOTA)
+    margen = timedelta(minutes=restricciones.get("margen_minutos", MARGEN_MINUTOS_DEFAULT))
+
+    if es_recurrente:
+        inicio_ventana = hora_programada
+        fin_ventana = hora_programada + margen
+        dentro = inicio_ventana <= ahora <= fin_ventana
+        return {"visible": dentro, "es_horario_estricto_activo": dentro}
+
+    # Evento único: visible desde (hora - margen) en adelante, sin límite superior.
+    inicio_ventana = hora_programada - margen
+    visible = ahora >= inicio_ventana
+    # "activo" (boost máximo) solo en la ventana cercana a la hora real,
+    # no en los días de atraso posteriores -- esos ya pesan por dias_atraso.
+    activo = inicio_ventana <= ahora <= hora_programada + margen
+    return {"visible": visible, "es_horario_estricto_activo": activo}
+
+def _parsear_trigger_iso8601(trigger_str: str):
+    """
+    Parsea un TRIGGER de iCal usado en 'reminders' de TickTick.
+    Devuelve minutos de anticipo (positivo = antes de la hora), o None
+    si no es un trigger "antes" parseable.
+    Ejemplos: "TRIGGER:-PT2H" -> 120.0 | "TRIGGER:-PT30M" -> 30.0
+    """
+    if not trigger_str or not isinstance(trigger_str, str):
+        return None
+    m = re.match(r"^TRIGGER:(-)?P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?$", trigger_str.strip())
+    if not m:
+        return None
+    es_antes = m.group(1) == "-"
+    dias = int(m.group(2) or 0)
+    horas = int(m.group(3) or 0)
+    minutos = int(m.group(4) or 0)
+    segundos = int(m.group(5) or 0)
+    total_minutos = dias * 24 * 60 + horas * 60 + minutos + segundos / 60
+    if not es_antes and total_minutos != 0:
+        return None
+    return total_minutos
+
+
+def obtener_anticipo_reminders_minutos(reminders: list):
+    """Mayor anticipo (minutos) configurado en TickTick, o None si no hay."""
+    if not reminders:
+        return None
+    anticipos = [_parsear_trigger_iso8601(r) for r in reminders]
+    anticipos = [a for a in anticipos if a is not None and a > 0]
+    return max(anticipos) if anticipos else None
+
+
+def calcular_ventana_visibilidad(restricciones: dict, es_recurrente: bool,
+                                   hora_programada: datetime, reminders: list = None,
+                                   ahora: datetime = None) -> dict:
+    """
+    Decide si una tarea de horario estricto (hora_importa=True, ventana=None)
+    debe mostrarse en /api/enfoque AHORA, y si merece el boost de "imnencia
+    activa" en el score.
+
+    RECURRENTE (pastilla diaria, rutina de salud con hora fija):
+      Oculta antes de su hora. Visible + activa SOLO en [hora, hora+margen].
+      Después del margen: oculta (se perdió esta ocurrencia; el día
+      siguiente, main.py decide si sube prioridad por repetición).
+
+    EVENTO ÚNICO (cita médica, vuelo) -- nunca se auto-completa:
+      Anticipo = mayor reminder configurado en TickTick, o si no hay,
+      margen_minutos de la clasificación automática.
+      Oculta antes de (hora - anticipo). Visible desde ahí EN ADELANTE,
+      sin límite superior (si se vence, sigue visible y acumulando
+      dias_atraso -- eso ya lo maneja calcular_peso_psicologico aparte).
+      "Activa" (boost máximo) solo cerca de la hora real:
+      [hora - anticipo, hora + margen].
+    """
+    ahora = ahora or datetime.now(BOGOTA)
+    margen = timedelta(minutes=restricciones.get("margen_minutos", MARGEN_MINUTOS_DEFAULT))
+
+    if es_recurrente:
+        fin_ventana = hora_programada + margen
+        dentro = hora_programada <= ahora <= fin_ventana
+        return {"visible": dentro, "es_horario_estricto_activo": dentro}
+
+    anticipo_min = obtener_anticipo_reminders_minutos(reminders)
+    anticipo = timedelta(minutes=anticipo_min) if anticipo_min is not None else margen
+    inicio_ventana = hora_programada - anticipo
+
+    visible = ahora >= inicio_ventana
+    activo = inicio_ventana <= ahora <= hora_programada + margen
+    return {"visible": visible, "es_horario_estricto_activo": activo}
