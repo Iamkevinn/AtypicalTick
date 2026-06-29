@@ -1,7 +1,8 @@
 # prediccion_vs_resultado.py
-import sqlite3
+import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from db import db_connection
 
 # --- Zona horaria centralizada (ver main.py) ---
 # timestamp_prediccion y timestamp_resultado dependian de
@@ -21,63 +22,50 @@ def _ahora_bogota_str() -> str:
 
 def init_tabla_predicciones():
     """Crea la tabla si no existe. Llamar una vez al iniciar la app."""
-    conn = sqlite3.connect('atypical_data.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS predicciones (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tarea_id TEXT,
-            tarea_nombre TEXT,
-            prediccion TEXT,
-            energia TEXT,
-            carpeta TEXT,
-            resultado_real TEXT,
-            timestamp_prediccion DATETIME DEFAULT CURRENT_TIMESTAMP,
-            timestamp_resultado DATETIME
-        )
-    ''')
-    conn.commit()
-    conn.close()
+    with db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS predicciones (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tarea_id TEXT,
+                tarea_nombre TEXT,
+                prediccion TEXT,
+                energia TEXT,
+                carpeta TEXT,
+                resultado_real TEXT,
+                timestamp_prediccion DATETIME DEFAULT CURRENT_TIMESTAMP,
+                timestamp_resultado DATETIME
+            )
+        ''')
 
 
 def registrar_prediccion(tarea_id: str, tarea_nombre: str, prediccion: str, energia: str, carpeta: str):
     if not prediccion or not prediccion.strip():
         return False
     try:
-        conn = sqlite3.connect('atypical_data.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO predicciones (tarea_id, tarea_nombre, prediccion, energia, carpeta, timestamp_prediccion)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (tarea_id, tarea_nombre, prediccion.strip(), energia, carpeta, _ahora_bogota_str()))
-        conn.commit()
-        conn.close()
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO predicciones (tarea_id, tarea_nombre, prediccion, energia, carpeta, timestamp_prediccion)
+                VALUES (?, ?, ?, ?, ?, ?)
+            ''', (tarea_id, tarea_nombre, prediccion.strip(), energia, carpeta, _ahora_bogota_str()))
         return True
     except Exception as e:
-        print("🚨 Error al guardar predicción:", e)
+        logging.exception("Error al guardar prediccion: %s", e)
         return False
 
 
 def cerrar_prediccion_con_resultado(tarea_id: str, resultado_real: str):
     try:
-        conn = sqlite3.connect('atypical_data.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT id FROM predicciones
-            WHERE tarea_id = ? AND resultado_real IS NULL
-            ORDER BY timestamp_prediccion DESC LIMIT 1
-        ''', (tarea_id,))
-        fila = cursor.fetchone()
-        if fila:
+        with db_connection() as conn:
+            cursor = conn.cursor()
             cursor.execute('''
                 UPDATE predicciones SET resultado_real = ?, timestamp_resultado = ?
-                WHERE id = ?
-            ''', (resultado_real, _ahora_bogota_str(), fila[0]))
-            conn.commit()
-        conn.close()
+                WHERE tarea_id = ? AND resultado_real IS NULL
+            ''', (resultado_real, _ahora_bogota_str(), tarea_id))
         return True
     except Exception as e:
-        print("🚨 Error al cerrar predicción:", e)
+        logging.exception("Error al cerrar prediccion: %s", e)
         return False
 
 
@@ -93,16 +81,15 @@ _FRASES_RESULTADO = {
 
 def obtener_contrastes_recientes(limite: int = 5):
     try:
-        conn = sqlite3.connect('atypical_data.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT tarea_nombre, prediccion, resultado_real, timestamp_resultado
-            FROM predicciones
-            WHERE resultado_real IS NOT NULL
-            ORDER BY timestamp_resultado DESC LIMIT ?
-        ''', (limite,))
-        filas = cursor.fetchall()
-        conn.close()
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT tarea_nombre, prediccion, resultado_real, timestamp_resultado
+                FROM predicciones
+                WHERE resultado_real IS NOT NULL
+                ORDER BY timestamp_resultado DESC LIMIT ?
+            ''', (limite,))
+            filas = cursor.fetchall()
 
         contrastes = []
         for tarea_nombre, prediccion, resultado_real, _ in filas:
@@ -112,5 +99,6 @@ def obtener_contrastes_recientes(limite: int = 5):
                 "resultado_frase": _FRASES_RESULTADO.get(resultado_real, resultado_real)
             })
         return contrastes
-    except Exception:
+    except Exception as e:
+        logging.exception("Error obteniendo contrastes recientes: %s", e)
         return []

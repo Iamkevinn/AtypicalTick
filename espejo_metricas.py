@@ -1,7 +1,8 @@
 # espejo_metricas.py
-import sqlite3
+import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from db import db_connection
 
 # --- Zona horaria centralizada (ver main.py) ---
 # Las filas de "interacciones" ahora guardan su timestamp en hora
@@ -33,15 +34,14 @@ def calcular_latencia_activacion(dias: int = 14):
     una tendencia sin al menos dos mitades de datos que comparar.
     """
     try:
-        conn = sqlite3.connect('atypical_data.db')
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT tarea_id, accion, timestamp FROM interacciones
-            WHERE timestamp >= ?
-            ORDER BY tarea_id, timestamp ASC
-        """, (_hace_n_dias_bogota(dias),))
-        filas = cursor.fetchall()
-        conn.close()
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT tarea_id, accion, timestamp FROM interacciones
+                WHERE timestamp >= ?
+                ORDER BY tarea_id, timestamp ASC
+            """, (_hace_n_dias_bogota(dias),))
+            filas = cursor.fetchall()
 
         primer_friccion_del_dia = {}  # (tarea_id, fecha) -> datetime
         pares_minutos = []  # (timestamp_cierre, minutos_transcurridos)
@@ -67,6 +67,9 @@ def calcular_latencia_activacion(dias: int = 14):
 
         pares_minutos.sort(key=lambda par: par[0])
         mitad = len(pares_minutos) // 2
+        if mitad == 0 or mitad == len(pares_minutos):
+            return None, None
+
         promedio_temprano = sum(m for _, m in pares_minutos[:mitad]) / mitad
         promedio_reciente = sum(m for _, m in pares_minutos[mitad:]) / (len(pares_minutos) - mitad)
         promedio_general = round(sum(m for _, m in pares_minutos) / len(pares_minutos))
@@ -79,7 +82,8 @@ def calcular_latencia_activacion(dias: int = 14):
             tendencia = "→ estable"
 
         return promedio_general, tendencia
-    except Exception:
+    except Exception as e:
+        logging.exception("Error calculando latencia de activacion: %s", e)
         return None, None
 
 
@@ -96,24 +100,23 @@ def calcular_desglose_aproximaciones(dias: int = 7):
     decorativos — mismo principio que evidencia_acumulada.py).
     """
     try:
-        conn = sqlite3.connect('atypical_data.db')
-        cursor = conn.cursor()
-        limite = _hace_n_dias_bogota(dias)
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            limite = _hace_n_dias_bogota(dias)
 
-        cursor.execute("""
-            SELECT accion, COUNT(*) FROM interacciones
-            WHERE timestamp >= ?
-            GROUP BY accion
-        """, (limite,))
-        acciones = dict(cursor.fetchall())
+            cursor.execute("""
+                SELECT accion, COUNT(*) FROM interacciones
+                WHERE timestamp >= ?
+                GROUP BY accion
+            """, (limite,))
+            acciones = dict(cursor.fetchall())
 
-        cursor.execute("""
-            SELECT tarea_id, accion, timestamp FROM interacciones
-            WHERE timestamp >= ?
-            ORDER BY tarea_id, timestamp ASC
-        """, (limite,))
-        filas = cursor.fetchall()
-        conn.close()
+            cursor.execute("""
+                SELECT tarea_id, accion, timestamp FROM interacciones
+                WHERE timestamp >= ?
+                ORDER BY tarea_id, timestamp ASC
+            """, (limite,))
+            filas = cursor.fetchall()
 
         retiro_previo = {}
         retornos = 0
@@ -131,7 +134,8 @@ def calcular_desglose_aproximaciones(dias: int = 7):
             return None
 
         return {"miradas": miradas, "primeros_pasos": primeros_pasos, "retornos": retornos}
-    except Exception:
+    except Exception as e:
+        logging.exception("Error calculando desglose de aproximaciones: %s", e)
         return None
 
 

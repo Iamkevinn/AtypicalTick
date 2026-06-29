@@ -1,47 +1,54 @@
 # discrepancia_emocional.py
-import sqlite3
+import logging
 from feedback_discrepancia import fue_rechazada_antes
+from db import db_connection
 
 MINIMO_REPETICIONES = 5
+
+PALABRAS_AGOTAMIENTO = (
+    "agotado", "agotada", "cansado", "cansada", "muy cansado", "muy cansada",
+    "sin energia", "sin energía", "fatiga", "exhausto", "exhausta", "quemado", "quemada"
+)
+PALABRAS_ANSIEDAD = ("ansiedad", "miedo", "nervioso", "nerviosa", "me preocupa", "pánico", "panico")
+PALABRAS_PERFECCIONISMO = ("perfecto", "perfecta", "listo", "lista", "perfeccionismo")
 
 
 def detectar_discrepancia_motivo(motivo_declarado: str, energia_actual: str):
     if not motivo_declarado:
         return None
     try:
-        conn = sqlite3.connect('atypical_data.db')
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT COUNT(*) FROM sesiones_tarea
-            WHERE bloqueo_inicial = ? AND energia = ?
-        """, (motivo_declarado, energia_actual))
-        total_declaraciones = cursor.fetchone()[0]
-        if total_declaraciones < MINIMO_REPETICIONES:
-            conn.close()
-            return None
-        cursor.execute("""
-            SELECT intervencion_usada,
-                   COUNT(*) as total,
-                   SUM(CASE WHEN resultado_final IN ('completada', 'avance_parcial', 'paso1_realizado') THEN 1 ELSE 0 END) as exitos
-            FROM sesiones_tarea
-            WHERE bloqueo_inicial = ? AND energia = ?
-            GROUP BY intervencion_usada
-            ORDER BY exitos DESC
-            LIMIT 1
-        """, (motivo_declarado, energia_actual))
-        fila = cursor.fetchone()
-        conn.close()
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT COUNT(*) FROM sesiones_tarea
+                WHERE bloqueo_inicial = ? AND energia = ?
+            """, (motivo_declarado, energia_actual))
+            total_declaraciones = cursor.fetchone()[0]
+            if total_declaraciones < MINIMO_REPETICIONES:
+                return None
+            cursor.execute("""
+                SELECT intervencion_usada,
+                       COUNT(*) as total,
+                       SUM(CASE WHEN resultado_final IN ('completada', 'avance_parcial', 'paso1_realizado') THEN 1 ELSE 0 END) as exitos
+                FROM sesiones_tarea
+                WHERE bloqueo_inicial = ? AND energia = ?
+                GROUP BY intervencion_usada
+                ORDER BY exitos DESC
+                LIMIT 1
+            """, (motivo_declarado, energia_actual))
+            fila = cursor.fetchone()
+
         if not fila or fila[1] < 2:
             return None
         intervencion_top, total, exitos = fila
         tasa = round((exitos / total) * 100) if total else 0
         motivo_lower = motivo_declarado.lower()
         categoria_declarada = None
-        if "agotado" in motivo_lower or "energía" in motivo_lower:
+        if any(palabra in motivo_lower for palabra in PALABRAS_AGOTAMIENTO):
             categoria_declarada = "agotamiento"
-        elif "ansiedad" in motivo_lower or "miedo" in motivo_lower:
+        elif any(palabra in motivo_lower for palabra in PALABRAS_ANSIEDAD):
             categoria_declarada = "ansiedad"
-        elif "perfecto" in motivo_lower or "listo" in motivo_lower:
+        elif any(palabra in motivo_lower for palabra in PALABRAS_PERFECCIONISMO):
             categoria_declarada = "perfeccionismo"
         intervencion_lower = (intervencion_top or "").lower()
         es_intervencion_ansiedad = "exposición" in intervencion_lower or "amigdalina" in intervencion_lower
@@ -61,5 +68,6 @@ def detectar_discrepancia_motivo(motivo_declarado: str, energia_actual: str):
                 )
             }
         return None
-    except Exception:
+    except Exception as e:
+        logging.exception("Error detectando discrepancia de motivo: %s", e)
         return None

@@ -5,15 +5,14 @@ from pydantic import BaseModel
 import json
 import requests
 import re
+import logging
 from datetime import datetime, timedelta 
 from dotenv import load_dotenv
 import os
 from zoneinfo import ZoneInfo
-import sqlite3
+from db import db_connection
 
-import os
-
-print(os.getpid())
+logging.debug("Proceso backend iniciado con pid %s", os.getpid())
 
 # --- Zona horaria centralizada del proyecto ---
 BOGOTA = ZoneInfo("America/Bogota")
@@ -58,48 +57,47 @@ class PeticionAutocuidado(BaseModel):
     tipo: str
 
 def init_db():
-    conn = sqlite3.connect('atypical_data.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS interacciones (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tarea_id TEXT,
-            tarea_nombre TEXT,
-            energia TEXT,
-            emocion_motivo TEXT,
-            accion TEXT,
-            hora INTEGER,
-            dia_semana TEXT, 
-            carpeta TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS sesiones_tarea (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            tarea_id TEXT,
-            bloqueo_inicial TEXT,
-            intervencion_usada TEXT,
-            resultado_final TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
+    with db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS interacciones (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tarea_id TEXT,
+                tarea_nombre TEXT,
+                energia TEXT,
+                emocion_motivo TEXT,
+                accion TEXT,
+                hora INTEGER,
+                dia_semana TEXT, 
+                carpeta TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sesiones_tarea (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tarea_id TEXT,
+                bloqueo_inicial TEXT,
+                intervencion_usada TEXT,
+                resultado_final TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
 
-    try: cursor.execute("ALTER TABLE interacciones ADD COLUMN dia_semana TEXT")
-    except: pass
-    try: cursor.execute("ALTER TABLE interacciones ADD COLUMN carpeta TEXT")
-    except: pass
-    try: cursor.execute("ALTER TABLE interacciones ADD COLUMN etiquetas TEXT") 
-    except: pass
-    try: cursor.execute("ALTER TABLE sesiones_tarea ADD COLUMN energia TEXT") 
-    except: pass
-    try: cursor.execute("ALTER TABLE interacciones ADD COLUMN metadata_ia TEXT") 
-    except: pass
-    try: cursor.execute("ALTER TABLE sesiones_tarea ADD COLUMN carpeta TEXT") 
-    except: pass
-    
-    conn.commit()
-    conn.close()
+        columnas = [
+            ("interacciones", "dia_semana", "TEXT"),
+            ("interacciones", "carpeta", "TEXT"),
+            ("interacciones", "etiquetas", "TEXT"),
+            ("sesiones_tarea", "energia", "TEXT"),
+            ("interacciones", "metadata_ia", "TEXT"),
+            ("sesiones_tarea", "carpeta", "TEXT"),
+        ]
+        for tabla, columna, tipo in columnas:
+            try:
+                cursor.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {tipo}")
+            except Exception as e:
+                if "duplicate column name" not in str(e).lower():
+                    logging.exception("Error agregando columna %s.%s: %s", tabla, columna, e)
 
 def registrar_interaccion(tarea_id: str, tarea_nombre: str, energia: str, accion: str, emocion: str = None, carpeta: str = "Inbox", etiquetas: str = "", metadata_ia: str = ""):
     try:
@@ -109,16 +107,14 @@ def registrar_interaccion(tarea_id: str, tarea_nombre: str, energia: str, accion
         dia_semana = dias[ahora.weekday()]
         timestamp_str = ahora.strftime("%Y-%m-%d %H:%M:%S")
 
-        conn = sqlite3.connect('atypical_data.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO interacciones (tarea_id, tarea_nombre, energia, emocion_motivo, accion, hora, dia_semana, carpeta, etiquetas, metadata_ia, timestamp) 
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (tarea_id, tarea_nombre, energia, emocion, accion, hora_actual, dia_semana, carpeta, etiquetas, metadata_ia, timestamp_str))
-        conn.commit()
-        conn.close()
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO interacciones (tarea_id, tarea_nombre, energia, emocion_motivo, accion, hora, dia_semana, carpeta, etiquetas, metadata_ia, timestamp) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (tarea_id, tarea_nombre, energia, emocion, accion, hora_actual, dia_semana, carpeta, etiquetas, metadata_ia, timestamp_str))
     except Exception as e:
-        print("Error al guardar interaccion:", e)
+        logging.exception("Error al guardar interaccion: %s", e)
         
 init_db()
 init_tabla_feedback()
@@ -128,21 +124,18 @@ init_tabla_lock_horario_estricto()
 
 def analizar_perfil_clinico(carpeta: str, etiquetas: list):
     try:
-        conn = sqlite3.connect('atypical_data.db')
-        cursor = conn.cursor()
-        
-        etiquetas_str = ",".join(etiquetas).lower() if etiquetas else "sin_etiquetas"
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            etiquetas_str = ",".join(etiquetas).lower() if etiquetas else "sin_etiquetas"
 
-        cursor.execute("""
-            SELECT emocion_motivo, COUNT(*) FROM interacciones 
-            WHERE (carpeta = ? OR (etiquetas != '' AND ? LIKE '%' || etiquetas || '%'))
-            AND emocion_motivo IS NOT NULL 
-            AND timestamp >= ? 
-            GROUP BY emocion_motivo ORDER BY COUNT(*) DESC
-        """, (carpeta, etiquetas_str, hace_n_dias_bogota(30)))
-        
-        resultados = cursor.fetchall()
-        conn.close()
+            cursor.execute("""
+                SELECT emocion_motivo, COUNT(*) FROM interacciones 
+                WHERE (carpeta = ? OR (etiquetas != '' AND ? LIKE '%' || etiquetas || '%'))
+                AND emocion_motivo IS NOT NULL 
+                AND timestamp >= ? 
+                GROUP BY emocion_motivo ORDER BY COUNT(*) DESC
+            """, (carpeta, etiquetas_str, hace_n_dias_bogota(30)))
+            resultados = cursor.fetchall()
 
         if not resultados: return {"dominante": None, "perfil": "desconocido"}
         
@@ -155,31 +148,32 @@ def analizar_perfil_clinico(carpeta: str, etiquetas: list):
             return {"dominante": emocion_principal, "perfil": "falta_claridad"}
         else:
             return {"dominante": emocion_principal, "perfil": "sobrecarga"}
-    except: 
+    except Exception as e:
+        logging.exception("Error analizando perfil clinico: %s", e)
         return {"dominante": None, "perfil": "desconocido"}
 
 def obtener_patron_contextual(carpeta: str, dia_semana: str):
     try:
-        conn = sqlite3.connect('atypical_data.db')
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT emocion_motivo, COUNT(*) as frec FROM interacciones 
-            WHERE carpeta = ? AND dia_semana = ? AND emocion_motivo IS NOT NULL AND emocion_motivo != ''
-            GROUP BY emocion_motivo ORDER BY frec DESC LIMIT 1
-        """, (carpeta, dia_semana))
-        resultado = cursor.fetchone()
-        
-        if not resultado:
+        with db_connection() as conn:
+            cursor = conn.cursor()
             cursor.execute("""
                 SELECT emocion_motivo, COUNT(*) as frec FROM interacciones 
-                WHERE carpeta = ? AND emocion_motivo IS NOT NULL AND emocion_motivo != ''
+                WHERE carpeta = ? AND dia_semana = ? AND emocion_motivo IS NOT NULL AND emocion_motivo != ''
                 GROUP BY emocion_motivo ORDER BY frec DESC LIMIT 1
-            """, (carpeta,))
+            """, (carpeta, dia_semana))
             resultado = cursor.fetchone()
             
-        conn.close()
+            if not resultado:
+                cursor.execute("""
+                    SELECT emocion_motivo, COUNT(*) as frec FROM interacciones 
+                    WHERE carpeta = ? AND emocion_motivo IS NOT NULL AND emocion_motivo != ''
+                    GROUP BY emocion_motivo ORDER BY frec DESC LIMIT 1
+                """, (carpeta,))
+                resultado = cursor.fetchone()
         return resultado[0] if resultado else None
-    except: return None
+    except Exception as e:
+        logging.exception("Error obteniendo patron contextual: %s", e)
+        return None
     
 def obtener_token():
     try:
@@ -191,46 +185,47 @@ def obtener_token():
 
 def calcular_dias_ausente():
     try:
-        conn = sqlite3.connect('atypical_data.db')
-        cursor = conn.cursor()
-        cursor.execute("SELECT timestamp FROM interacciones ORDER BY timestamp DESC LIMIT 1")
-        ultima = cursor.fetchone()
-        conn.close()
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT timestamp FROM interacciones ORDER BY timestamp DESC LIMIT 1")
+            ultima = cursor.fetchone()
         
         if ultima:
             fecha_ultima = datetime.strptime(ultima[0], "%Y-%m-%d %H:%M:%S").replace(tzinfo=BOGOTA)
             dias = (datetime.now(BOGOTA) - fecha_ultima).days
             return max(0, dias)
         return 0
-    except: return 0
+    except Exception as e:
+        logging.exception("Error calculando dias ausente: %s", e)
+        return 0
 
 def contar_intentos_hoy():
     try:
-        conn = sqlite3.connect('atypical_data.db')
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT COUNT(*) FROM interacciones 
-            WHERE accion IN ('intento', 'afronto_ansiedad', 'completada', 'paso1_comprometido', 'exposicion_mirar') 
-            AND date(timestamp) = ?
-        """, (hoy_bogota_str(),))
-        intentos = cursor.fetchone()[0]
-        conn.close()
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT COUNT(*) FROM interacciones 
+                WHERE accion IN ('intento', 'afronto_ansiedad', 'completada', 'paso1_comprometido', 'exposicion_mirar') 
+                AND date(timestamp) = ?
+            """, (hoy_bogota_str(),))
+            intentos = cursor.fetchone()[0]
         return intentos
-    except: return 0
+    except Exception as e:
+        logging.exception("Error contando intentos de hoy: %s", e)
+        return 0
 
 load_dotenv()
 
 def contar_friccion_consecutiva(tarea_id: str):
     try:
-        conn = sqlite3.connect('atypical_data.db')
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT accion FROM interacciones 
-            WHERE tarea_id = ? AND date(timestamp) = ?
-            ORDER BY timestamp DESC
-        """, (tarea_id, hoy_bogota_str()))
-        acciones = cursor.fetchall()
-        conn.close()
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT accion FROM interacciones 
+                WHERE tarea_id = ? AND date(timestamp) = ?
+                ORDER BY timestamp DESC
+            """, (tarea_id, hoy_bogota_str()))
+            acciones = cursor.fetchall()
         
         friccion = 0
         for (acc,) in acciones:
@@ -239,21 +234,23 @@ def contar_friccion_consecutiva(tarea_id: str):
             if acc in ['intento', 'afronto_ansiedad', 'pidio_ayuda', 'exposicion_mirar', 'paso1_comprometido']:
                 friccion += 1
         return friccion
-    except: return 0
+    except Exception as e:
+        logging.exception("Error contando friccion consecutiva: %s", e)
+        return 0
 
 def fue_perdonada_recientemente(tarea_id: str) -> bool:
     try:
-        conn = sqlite3.connect('atypical_data.db')
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT COUNT(*) FROM interacciones
-            WHERE tarea_id = ? AND accion = 'perdonada'
-            AND timestamp >= ?
-        """, (tarea_id, hace_n_dias_bogota(7)))
-        count = cursor.fetchone()[0]
-        conn.close()
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT COUNT(*) FROM interacciones
+                WHERE tarea_id = ? AND accion = 'perdonada'
+                AND timestamp >= ?
+            """, (tarea_id, hace_n_dias_bogota(7)))
+            count = cursor.fetchone()[0]
         return count > 0
-    except:
+    except Exception as e:
+        logging.exception("Error consultando perdon reciente: %s", e)
         return False
 
 app = FastAPI(title="AtypicalTick API")
@@ -267,20 +264,20 @@ app.add_middleware(
 )
 
 def _job_horario_estricto():
-    print("JOB EJECUTADO")
+    logging.debug("JOB EJECUTADO")
     token = obtener_token()
     if not token:
-        print("[scheduler] Sin token, se omite revisión de horario estricto.")
+        logging.debug("[scheduler] Sin token, se omite revision de horario estricto.")
         return
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
     procesadas = procesar_horario_estricto_vencido(headers, {}, registrar_interaccion)
     if procesadas:
-        print(f"[scheduler] {procesadas} tarea(s) cíclicas marcadas como desconocidas (ocultas localmente).")
+        logging.info("[scheduler] %s tarea(s) ciclicas marcadas como desconocidas (ocultas localmente).", procesadas)
 
 scheduler = BackgroundScheduler()
 scheduler.add_job(_job_horario_estricto, "interval", minutes=1, id="horario_estricto")
-print("INICIANDO SCHEDULER")
-print(id(scheduler))
+logging.debug("INICIANDO SCHEDULER")
+logging.debug("Scheduler id: %s", id(scheduler))
 scheduler.start()
 
 
@@ -294,7 +291,8 @@ def _parsear_fecha_ticktick_main(fecha_str: str):
     try:
         fecha_limpia = re.sub(r'\.\d+', '', fecha_str)
         return datetime.strptime(fecha_limpia, "%Y-%m-%dT%H:%M:%S%z")
-    except Exception:
+    except Exception as e:
+        logging.exception("Error parseando fecha de TickTick: %s", e)
         return None
 
 
@@ -310,7 +308,7 @@ def obtener_tarea_enfoque(energia: str = "alta"):
         resp_listas = requests.get(url_listas, headers=headers, timeout=10)
         if resp_listas.status_code != 200: raise HTTPException(status_code=500)
     except requests.exceptions.RequestException as e:
-        print(f"Error al obtener listas de TickTick: {e}")
+        logging.exception("Error al obtener listas de TickTick: %s", e)
         raise HTTPException(status_code=503, detail="TickTick tardo demasiado en responder.")
         
     listas = resp_listas.json()
@@ -332,17 +330,16 @@ def obtener_tarea_enfoque(energia: str = "alta"):
             if resp_tareas.status_code == 200:
                 todas_las_tareas.extend(resp_tareas.json().get('tasks', []))
             elif resp_tareas.status_code == 429:
-                print(f"TickTick nos pidio que frenemos (Rate Limit) en la lista {nombre_lista}")
+                logging.warning("TickTick pidio frenar por Rate Limit en la lista %s", nombre_lista)
         except requests.exceptions.Timeout:
-            print(f"TickTick tardo demasiado en la lista '{nombre_lista}'. La saltamos por ahora.")
+            logging.warning("TickTick tardo demasiado en la lista '%s'. Se omite por ahora.", nombre_lista)
         except requests.exceptions.RequestException as e:
-            print(f"Error de conexion con TickTick en lista '{nombre_lista}': {e}")
+            logging.exception("Error de conexion con TickTick en lista '%s': %s", nombre_lista, e)
 
-    conn = sqlite3.connect('atypical_data.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM interacciones WHERE accion='completada' AND date(timestamp) = ?", (hoy_bogota_str(),))
-    completadas_hoy = cursor.fetchone()[0]
-    conn.close()
+    with db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM interacciones WHERE accion='completada' AND date(timestamp) = ?", (hoy_bogota_str(),))
+        completadas_hoy = cursor.fetchone()[0]
     
     necesita_calentamiento = completadas_hoy == 0
     tareas_validas = []
@@ -545,7 +542,7 @@ def corregir_perdon(proyecto_id: str, tarea_id: str, tarea_nombre: str = "Descon
             tarea['dueDate'] = hoy.strftime("%Y-%m-%dT12:00:00+0000")
         requests.post(url_tarea, headers=headers, json=tarea, timeout=10)
     except requests.exceptions.RequestException as e:
-        print(f"Error al corregir perdon en TickTick: {e}")
+        logging.exception("Error al corregir perdon en TickTick: %s", e)
         raise HTTPException(status_code=503, detail="TickTick tardo demasiado en responder.")
 
     registrar_correccion(tarea_id, "perdon_rutina", "perdonada", "era_critica", carpeta)
@@ -582,12 +579,10 @@ def liberar_tarea(proyecto_id: str, tarea_id: str, tarea_nombre: str = "Desconoc
         registrar_interaccion(tarea_id, tarea_nombre, energia, "completada", None, carpeta)
         cerrar_prediccion_con_resultado(tarea_id, "completada")
         
-        conn = sqlite3.connect('atypical_data.db')
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO sesiones_tarea (tarea_id, bloqueo_inicial, intervencion_usada, resultado_final, energia, carpeta, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-              (tarea_id, bloqueo_previo, intervencion_usada, "completada", energia, carpeta, datetime.now(BOGOTA).strftime("%Y-%m-%d %H:%M:%S")))
-        conn.commit()
-        conn.close()
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT INTO sesiones_tarea (tarea_id, bloqueo_inicial, intervencion_usada, resultado_final, energia, carpeta, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                  (tarea_id, bloqueo_previo, intervencion_usada, "completada", energia, carpeta, datetime.now(BOGOTA).strftime("%Y-%m-%d %H:%M:%S")))
         return {"estado": "exito"}
     raise HTTPException(status_code=500)
 
@@ -656,12 +651,10 @@ def posponer_tarea(proyecto_id: str, tarea_id: str, datos: PeticionPosponer):
     resultado_sesion = "avance_parcial" if "Avance Parcial" in datos.motivo_posponer else "abandono_consciente"
     cerrar_prediccion_con_resultado(tarea_id, resultado_sesion if accion_historial != "perdonada" else "completada")
     
-    conn = sqlite3.connect('atypical_data.db')
-    cursor = conn.cursor()
-    cursor.execute("INSERT INTO sesiones_tarea (tarea_id, bloqueo_inicial, intervencion_usada, resultado_final, energia, carpeta, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (tarea_id, datos.bloqueo_previo, datos.intervencion_usada, resultado_sesion, datos.energia, datos.carpeta, datetime.now(BOGOTA).strftime("%Y-%m-%d %H:%M:%S")))
-    conn.commit()
-    conn.close()
+    with db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO sesiones_tarea (tarea_id, bloqueo_inicial, intervencion_usada, resultado_final, energia, carpeta, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (tarea_id, datos.bloqueo_previo, datos.intervencion_usada, resultado_sesion, datos.energia, datos.carpeta, datetime.now(BOGOTA).strftime("%Y-%m-%d %H:%M:%S")))
     return {"estado": "exito"}
        
 class TareaNueva(BaseModel):
@@ -837,11 +830,10 @@ def desglose_magico(peticion: PeticionBloqueo):
 @app.get("/api/historial")
 def ver_historial():
     try:
-        conn = sqlite3.connect('atypical_data.db')
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM interacciones ORDER BY timestamp DESC")
-        filas = cursor.fetchall()
-        conn.close()
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM interacciones ORDER BY timestamp DESC")
+            filas = cursor.fetchall()
         
         return {"total": len(filas), "registros": filas}
     
@@ -850,44 +842,72 @@ def ver_historial():
 
 @app.get("/api/debug-sesiones")
 def ver_sesiones():
-    conn = sqlite3.connect('atypical_data.db')
-    cursor = conn.cursor()
-    cursor.execute("SELECT bloqueo_inicial, intervencion_usada, resultado_final, energia FROM sesiones_tarea")
-    sesiones = cursor.fetchall()
-    conn.close()
+    with db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT bloqueo_inicial, intervencion_usada, resultado_final, energia FROM sesiones_tarea")
+        sesiones = cursor.fetchall()
     return {"sesiones_registradas": sesiones}
 
 @app.get("/api/metricas-clinicas")
 def obtener_metricas_clinicas():
     try:
-        conn = sqlite3.connect('atypical_data.db')
-        cursor = conn.cursor()
-        
-        cursor.execute("SELECT COUNT(*) FROM sesiones_tarea WHERE bloqueo_inicial != 'Ninguno' AND resultado_final IN ('completada', 'avance_parcial')")
-        recuperaciones_exitosas = cursor.fetchone()[0]
-        conn.close()
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM sesiones_tarea WHERE bloqueo_inicial != 'Ninguno' AND resultado_final IN ('completada', 'avance_parcial')")
+            recuperaciones_exitosas = cursor.fetchone()[0]
         
         return {
             "recuperaciones_exitosas": recuperaciones_exitosas,
             "mensaje": f"Has superado {recuperaciones_exitosas} bloqueos que parecian imposibles. Tu historial demuestra que los bloqueos no son permanentes." if recuperaciones_exitosas > 0 else ""
         }
     except Exception as e:
+        logging.exception("Error obteniendo metricas clinicas: %s", e)
         return {"error": str(e)}
 
 @app.get("/api/espejo-conductual")
 def espejo_conductual():
     try:
-        conn = sqlite3.connect('atypical_data.db')
-        cursor = conn.cursor()
-        hace_7_dias = hace_n_dias_bogota(7)
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            hace_7_dias = hace_n_dias_bogota(7)
 
-        cursor.execute("""
-            SELECT accion, COUNT(*) FROM interacciones 
-            WHERE timestamp >= ?
-            GROUP BY accion
-        """, (hace_7_dias,))
-        acciones = dict(cursor.fetchall())
-        
+            cursor.execute("""
+                SELECT accion, COUNT(*) FROM interacciones 
+                WHERE timestamp >= ?
+                GROUP BY accion
+            """, (hace_7_dias,))
+            acciones = dict(cursor.fetchall())
+
+            cursor.execute("""
+                SELECT COUNT(DISTINCT tarea_id) FROM interacciones 
+                WHERE accion IN ('completada', 'avance_parcial', 'paso1_realizado') 
+                AND tarea_id IN (
+                    SELECT tarea_id FROM interacciones WHERE accion IN ('pospuesta', 'rechazada', 'abandono_consciente')
+                )
+            """)
+            recuperaciones = cursor.fetchone()[0]
+
+            cursor.execute("""
+                SELECT tarea_id, accion, timestamp FROM interacciones
+                WHERE timestamp >= ?
+                ORDER BY tarea_id, timestamp ASC
+            """, (hace_7_dias,))
+            filas_friccion = cursor.fetchall()
+
+            cursor.execute("""
+                SELECT COUNT(DISTINCT date(timestamp)) FROM interacciones
+                WHERE accion = 'autocuidado' AND timestamp >= ?
+            """, (hace_7_dias,))
+            dias_autocuidado = cursor.fetchone()[0]
+
+            cursor.execute("""
+                SELECT carpeta, COUNT(*) as total, 
+                       SUM(CASE WHEN accion IN ('completada', 'avance_parcial', 'paso1_realizado') THEN 1 ELSE 0 END) as exitos
+                FROM interacciones WHERE carpeta != 'Inbox' GROUP BY carpeta HAVING total > 3
+                ORDER BY exitos DESC LIMIT 1
+            """)
+            datos_evidencia = cursor.fetchone()
+
         aproximaciones_reales = (
             acciones.get('exposicion_mirar', 0) +
             acciones.get('paso1_comprometido', 0) +
@@ -899,37 +919,21 @@ def espejo_conductual():
 
         transiciones_logradas = acciones.get('exposicion_mirar', 0) + acciones.get('paso1_comprometido', 0)
 
-        cursor.execute("""
-            SELECT COUNT(DISTINCT tarea_id) FROM interacciones 
-            WHERE accion IN ('completada', 'avance_parcial', 'paso1_realizado') 
-            AND tarea_id IN (
-                SELECT tarea_id FROM interacciones WHERE accion IN ('pospuesta', 'rechazada', 'abandono_consciente')
-            )
-        """)
-        recuperaciones = cursor.fetchone()[0]
-
-        cursor.execute("""
-            SELECT tarea_id, accion, timestamp FROM interacciones
-            WHERE timestamp >= ?
-            ORDER BY tarea_id, timestamp ASC
-        """, (hace_7_dias,))
-        filas_friccion = cursor.fetchall()
-
         bloqueos_atravesados = 0
         friccion_previa = {}
-        for tarea_id, accion, _ in filas_friccion:
-            if accion in ('intento', 'afronto_ansiedad', 'pidio_ayuda', 'exposicion_mirar', 'paso1_comprometido'):
-                friccion_previa[tarea_id] = friccion_previa.get(tarea_id, 0) + 1
-            elif accion in ('completada', 'avance_parcial', 'paso1_realizado'):
-                if friccion_previa.get(tarea_id, 0) >= 1:
-                    bloqueos_atravesados += 1
-                friccion_previa[tarea_id] = 0
+        for tarea_id, accion, ts_str in filas_friccion:
+            try:
+                ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+            except (TypeError, ValueError):
+                continue
 
-        cursor.execute("""
-            SELECT COUNT(DISTINCT date(timestamp)) FROM interacciones
-            WHERE accion = 'autocuidado' AND timestamp >= ?
-        """, (hace_7_dias,))
-        dias_autocuidado = cursor.fetchone()[0]
+            if accion in ('intento', 'afronto_ansiedad', 'pidio_ayuda', 'exposicion_mirar', 'paso1_comprometido'):
+                friccion_previa[tarea_id] = ts
+            elif accion in ('completada', 'avance_parcial', 'paso1_realizado'):
+                inicio = friccion_previa.get(tarea_id)
+                if inicio and ts.date() == inicio.date() and (ts - inicio) <= timedelta(hours=8):
+                    bloqueos_atravesados += 1
+                friccion_previa.pop(tarea_id, None)
 
         patron_detectado = None
         pospuestas = acciones.get('pospuesta', 0) + acciones.get('rechazada', 0)
@@ -949,21 +953,12 @@ def espejo_conductual():
                 "mensaje": "Has pedido mucha asistencia pero ejecutado poca accion fisica. Esto suele pasar cuando buscamos sentirnos 'completamente listos' antes de empezar. El objetivo hoy es dar un paso imperfecto o mediocre."
             }
 
-        cursor.execute("""
-            SELECT carpeta, COUNT(*) as total, 
-                   SUM(CASE WHEN accion IN ('completada', 'avance_parcial', 'paso1_realizado') THEN 1 ELSE 0 END) as exitos
-            FROM interacciones WHERE carpeta != 'Inbox' GROUP BY carpeta HAVING total > 3
-            ORDER BY exitos DESC LIMIT 1
-        """)
-        datos_evidencia = cursor.fetchone()
         insight_profundo = None
         
         if datos_evidencia:
             tasa = round((datos_evidencia[2] / datos_evidencia[1]) * 100)
             if tasa >= 50:
                 insight_profundo = f"La sensacion de dificultad suele ser alta con las tareas de '{datos_evidencia[0]}'. Sin embargo, tu historial clinico muestra que cuando decides dar el primer micro-paso fisico, logras avanzar o terminar el {tasa}% de las veces. Tienes la capacidad; el desafio es solo el momento de arranque."
-
-        conn.close()
 
         siguiente_experimento = generar_siguiente_experimento()
         contrastes_recientes = obtener_contrastes_recientes(limite=3)
@@ -1018,7 +1013,8 @@ def obtener_tareas_cierre():
     try:
         resp_listas = requests.get(url_listas, headers=headers, timeout=10)
         listas = resp_listas.json()
-    except:
+    except requests.exceptions.RequestException as e:
+        logging.exception("Error obteniendo listas para cierre diario: %s", e)
         raise HTTPException(status_code=503, detail="Error con TickTick")
 
     mapa_carpetas = {lista['id']: lista['name'] for lista in listas}
@@ -1057,7 +1053,8 @@ def obtener_tareas_cierre():
                                 "es_atrasada": fecha_tarea < hoy,
                                 "es_rutina": bool(t.get('repeatFlag'))
                             })
-        except:
+        except requests.exceptions.RequestException as e:
+            logging.exception("Error obteniendo tareas de cierre para lista %s: %s", lista.get('id'), e)
             continue
 
     tareas_cierre.sort(key=lambda x: (x['es_atrasada'], x['titulo']))
@@ -1123,8 +1120,8 @@ def olvido_cierre(proyecto_id: str, tarea_id: str, tarea_nombre: str = "Desconoc
                 tarea['dueDate'] = manana.strftime("%Y-%m-%d") + hora_original
                 
         requests.post(url_tarea, headers=headers, json=tarea, timeout=10)
-    except:
-        pass
+    except requests.exceptions.RequestException as e:
+        logging.exception("Error reprogramando tarea olvidada en cierre diario: %s", e)
     
     registrar_interaccion(tarea_id, tarea_nombre, "desconocida", "no_recuerda", "Cierre Diario", carpeta)
     return {"estado": "exito"}

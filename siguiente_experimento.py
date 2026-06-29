@@ -1,7 +1,8 @@
 # siguiente_experimento.py
-import sqlite3
+import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from db import db_connection
 
 # --- Zona horaria centralizada (ver main.py) ---
 BOGOTA = ZoneInfo("America/Bogota")
@@ -9,23 +10,22 @@ BOGOTA = ZoneInfo("America/Bogota")
 
 def generar_siguiente_experimento():
     try:
-        conn = sqlite3.connect('atypical_data.db')
-        cursor = conn.cursor()
-        hace_14_dias = (datetime.now(BOGOTA) - timedelta(days=14)).strftime("%Y-%m-%d %H:%M:%S")
-        cursor.execute("""
-            SELECT intervencion_usada,
-                   COUNT(*) as total,
-                   SUM(CASE WHEN resultado_final IN ('completada', 'avance_parcial', 'paso1_realizado') THEN 1 ELSE 0 END) as exitos
-            FROM sesiones_tarea
-            WHERE timestamp >= ?
-              AND intervencion_usada != 'Ninguna'
-            GROUP BY intervencion_usada
-            HAVING total >= 3
-            ORDER BY exitos DESC
-            LIMIT 1
-        """, (hace_14_dias,))
-        fila = cursor.fetchone()
-        conn.close()
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            hace_14_dias = (datetime.now(BOGOTA) - timedelta(days=14)).strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute("""
+                SELECT intervencion_usada,
+                       COUNT(*) as total,
+                       SUM(CASE WHEN resultado_final IN ('completada', 'avance_parcial', 'paso1_realizado') THEN 1 ELSE 0 END) as exitos
+                FROM sesiones_tarea
+                WHERE timestamp >= ?
+                  AND intervencion_usada != 'Ninguna'
+                GROUP BY intervencion_usada
+                HAVING total >= 3
+                ORDER BY exitos DESC
+                LIMIT 1
+            """, (hace_14_dias,))
+            fila = cursor.fetchone()
         if not fila:
             return None
         intervencion, total, exitos = fila
@@ -56,5 +56,6 @@ def generar_siguiente_experimento():
             "experimento": accion_concreta,
             "evidencia": f"En las últimas 2 semanas, esto te ayudó a avanzar {exitos} de {total} veces que lo intentaste."
         }
-    except Exception:
+    except Exception as e:
+        logging.exception("Error generando siguiente experimento: %s", e)
         return None

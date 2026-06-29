@@ -1,57 +1,55 @@
 # feedback_discrepancia.py
-import sqlite3
+import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from db import db_connection
 
 # --- Zona horaria centralizada (ver main.py) ---
 BOGOTA = ZoneInfo("America/Bogota")
 
 
 def init_tabla_feedback():
-    conn = sqlite3.connect('atypical_data.db')
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS feedback_discrepancia (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            motivo_declarado TEXT,
-            energia TEXT,
-            intervencion_sugerida TEXT,
-            respuesta TEXT,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    conn.commit()
-    conn.close()
+    with db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS feedback_discrepancia (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                motivo_declarado TEXT,
+                energia TEXT,
+                intervencion_sugerida TEXT,
+                respuesta TEXT,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
 
 
 def registrar_feedback_discrepancia(motivo_declarado: str, energia: str, intervencion_sugerida: str, respuesta: str):
     try:
-        conn = sqlite3.connect('atypical_data.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO feedback_discrepancia (motivo_declarado, energia, intervencion_sugerida, respuesta, timestamp)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (motivo_declarado, energia, intervencion_sugerida, respuesta, datetime.now(BOGOTA).strftime("%Y-%m-%d %H:%M:%S")))
-        conn.commit()
-        conn.close()
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO feedback_discrepancia (motivo_declarado, energia, intervencion_sugerida, respuesta, timestamp)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (motivo_declarado, energia, intervencion_sugerida, respuesta, datetime.now(BOGOTA).strftime("%Y-%m-%d %H:%M:%S")))
     except Exception as e:
-        print("🚨 Error al guardar feedback de discrepancia:", e)
+        logging.exception("Error al guardar feedback de discrepancia: %s", e)
 
 
 def fue_rechazada_antes(motivo_declarado: str, energia: str, intervencion_sugerida: str) -> bool:
     try:
-        conn = sqlite3.connect('atypical_data.db')
-        cursor = conn.cursor()
-        cursor.execute('''
-            SELECT respuesta FROM feedback_discrepancia
-            WHERE motivo_declarado = ? AND energia = ? AND intervencion_sugerida = ?
-            ORDER BY timestamp DESC LIMIT 1
-        ''', (motivo_declarado, energia, intervencion_sugerida))
-        fila = cursor.fetchone()
-        conn.close()
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT respuesta FROM feedback_discrepancia
+                WHERE motivo_declarado = ? AND energia = ? AND intervencion_sugerida = ?
+                ORDER BY timestamp DESC LIMIT 1
+            ''', (motivo_declarado, energia, intervencion_sugerida))
+            fila = cursor.fetchone()
 
-        if fila and fila[0] == 'no_es_eso':
+        respuesta = (fila[0] or "").strip().lower() if fila else ""
+        if respuesta in ("no_es_eso", "no es eso"):
             return True
         return False
-    except Exception:
+    except Exception as e:
+        logging.exception("Error consultando feedback de discrepancia: %s", e)
         return False
