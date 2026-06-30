@@ -24,6 +24,7 @@ def hoy_bogota_str() -> str:
     return datetime.now(BOGOTA).strftime("%Y-%m-%d")
 
 # --- Modulos clinicos separados ---
+from discrepancia_emocional import PALABRAS_AGOTAMIENTO, PALABRAS_ANSIEDAD, PALABRAS_PERFECCIONISMO
 from deteccion_crisis import detectar_riesgo, respuesta_crisis
 from efectividad_historica_v2 import obtener_efectividad_historica
 from discrepancia_emocional import detectar_discrepancia_motivo
@@ -52,6 +53,9 @@ from gestion_horario_estricto import (
     _es_critica_salud,
 )
 from apscheduler.schedulers.background import BackgroundScheduler
+
+PALABRAS_FALTA_CLARIDAD = ("no entiendo", "me falta entender", "no tengo claridad", "no sé qué", "no se que")
+
 
 class PeticionAutocuidado(BaseModel):
     tipo: str
@@ -140,11 +144,11 @@ def analizar_perfil_clinico(carpeta: str, etiquetas: list):
         if not resultados: return {"dominante": None, "perfil": "desconocido"}
         
         emocion_principal = resultados[0][0].lower()
-        if "ansiedad" in emocion_principal or "miedo" in emocion_principal:
+        if any(p in emocion_principal for p in PALABRAS_ANSIEDAD):
             return {"dominante": emocion_principal, "perfil": "evitacion"}
-        elif "agotado" in emocion_principal or "energia" in emocion_principal:
+        elif any(p in emocion_principal for p in PALABRAS_AGOTAMIENTO):
             return {"dominante": emocion_principal, "perfil": "agotamiento"}
-        elif "entiendo" in emocion_principal or "claridad" in emocion_principal:
+        elif any(p in emocion_principal for p in PALABRAS_FALTA_CLARIDAD):
             return {"dominante": emocion_principal, "perfil": "falta_claridad"}
         else:
             return {"dominante": emocion_principal, "perfil": "sobrecarga"}
@@ -258,7 +262,7 @@ app = FastAPI(title="AtypicalTick API")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -370,16 +374,18 @@ def obtener_tarea_enfoque(energia: str = "alta"):
         if es_horario_estricto_tmp and not tarea.get('isAllDay', True) and 'dueDate' in tarea:
             hora_programada_tmp = _parsear_fecha_ticktick_main(tarea['dueDate'])
             if hora_programada_tmp:
+                es_salud_tmp = _es_critica_salud(tarea, nombre_carpeta_tmp)
                 ventana = calcular_ventana_visibilidad(
                     restricciones_tmp,
                     es_recurrente=es_recurrente_tmp,
                     hora_programada=hora_programada_tmp,
                     reminders=tarea.get('reminders'),
                     ahora=ahora,
+                    es_critica_salud=es_salud_tmp,
                 )
                 info_horario_estricto[tarea['id']] = {
                     "activo": ventana["es_horario_estricto_activo"],
-                    "es_salud": _es_critica_salud(tarea, nombre_carpeta_tmp),
+                    "es_salud": es_salud_tmp,
                 }
                 if not ventana["visible"]:
                     continue
@@ -569,29 +575,64 @@ def registrar_intento_valiente(tarea_id: str, accion: str = "intento", tarea_nom
         cerrar_prediccion_con_resultado(tarea_id, accion)
     return {"estado": "exito"}
 
+
+# ─── CAMBIO: /api/liberar ahora detecta si la tarea es recurrente ───
 @app.post("/api/liberar/{proyecto_id}/{tarea_id}")
-def liberar_tarea(proyecto_id: str, tarea_id: str, tarea_nombre: str = "Desconocida", energia: str = "desconocida", carpeta: str = "Inbox", bloqueo_previo: str = "Ninguno", intervencion_usada: str = "Ninguna"):
+def liberar_tarea(proyecto_id: str, tarea_id: str, tarea_nombre: str = "Desconocida",
+                  energia: str = "desconocida", carpeta: str = "Inbox",
+                  bloqueo_previo: str = "Ninguno", intervencion_usada: str = "Ninguna"):
     token = obtener_token()
-    headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-    respuesta = requests.post(f"https://api.ticktick.com/open/v1/project/{proyecto_id}/task/{tarea_id}/complete", headers=headers, timeout=10)
-    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+
+    # Obtenemos los datos de la tarea ANTES de completarla para leer repeatFlag.
+    # Si el GET falla (timeout, red), no bloqueamos la operacion principal:
+    # simplemente asumimos que no es recurrente y seguimos.
+    es_recurrente = False
+    url_tarea = f"https://api.ticktick.com/open/v1/project/{proyecto_id}/task/{tarea_id}"
+    try:
+        resp_tarea = requests.get(url_tarea, headers=headers, timeout=10)
+        if resp_tarea.status_code == 200:
+            tarea_data = resp_tarea.json()
+            es_recurrente = bool(tarea_data.get('repeatFlag'))
+    except requests.exceptions.RequestException as e:
+        logging.warning("No se pudo obtener datos de la tarea antes de completar (se asume no recurrente): %s", e)
+
+    # Completar la tarea en TickTick.
+    url_complete = f"https://api.ticktick.com/open/v1/project/{proyecto_id}/task/{tarea_id}/complete"
+    respuesta = requests.post(url_complete, headers=headers, timeout=10)
+
     if respuesta.status_code == 200:
         registrar_interaccion(tarea_id, tarea_nombre, energia, "completada", None, carpeta)
         cerrar_prediccion_con_resultado(tarea_id, "completada")
-        
+
         with db_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("INSERT INTO sesiones_tarea (tarea_id, bloqueo_inicial, intervencion_usada, resultado_final, energia, carpeta, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                  (tarea_id, bloqueo_previo, intervencion_usada, "completada", energia, carpeta, datetime.now(BOGOTA).strftime("%Y-%m-%d %H:%M:%S")))
-        return {"estado": "exito"}
+            cursor.execute(
+                "INSERT INTO sesiones_tarea (tarea_id, bloqueo_inicial, intervencion_usada, "
+                "resultado_final, energia, carpeta, timestamp) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (tarea_id, bloqueo_previo, intervencion_usada, "completada", energia,
+                 carpeta, datetime.now(BOGOTA).strftime("%Y-%m-%d %H:%M:%S"))
+            )
+
+        # Le decimos al frontend si era recurrente para que muestre
+        # el mensaje explicativo correcto ("reaparece mañana porque
+        # eso es lo que hacen los hábitos").
+        return {"estado": "exito", "es_recurrente": es_recurrente}
+
     raise HTTPException(status_code=500)
+# ────────────────────────────────────────────────────────────────────
+
 
 class PeticionPosponer(BaseModel):
     tarea_nombre: str = "Desconocida"
     energia: str = "desconocida"
     carpeta: str = "Inbox"
     motivo_posponer: str = "Sin motivo"
-    bloqueo_previo: str = "Ninguno",
+    bloqueo_previo: str = "Ninguno"
     intervencion_usada: str = "Ninguna"
 
 @app.post("/api/posponer/{proyecto_id}/{tarea_id}")
@@ -603,8 +644,15 @@ def posponer_tarea(proyecto_id: str, tarea_id: str, datos: PeticionPosponer):
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     
     url_tarea = f"https://api.ticktick.com/open/v1/project/{proyecto_id}/task/{tarea_id}"
-    tarea = requests.get(url_tarea, headers=headers, timeout=10).json()
-    
+    try:
+        resp_tarea = requests.get(url_tarea, headers=headers, timeout=10)
+        if resp_tarea.status_code != 200:
+            raise HTTPException(status_code=502, detail="TickTick no devolvió la tarea correctamente.")
+        tarea = resp_tarea.json()
+    except requests.exceptions.RequestException as e:
+        logging.exception("Error al obtener tarea para posponer: %s", e)
+        raise HTTPException(status_code=503, detail="TickTick tardó demasiado en responder.")
+        
     es_recurrente = bool(tarea.get('repeatFlag'))
     carpeta_lower = datos.carpeta.lower()
     titulo_lower = datos.tarea_nombre.lower()
@@ -1001,8 +1049,6 @@ def registrar_autocuidado(datos: PeticionAutocuidado):
     )
     return {"estado": "exito"}
 
-# --- Añadir al final de main.py ---
-
 @app.get("/api/cierre-diario")
 def obtener_tareas_cierre():
     token = obtener_token()
@@ -1077,12 +1123,19 @@ def completar_retroactivo(proyecto_id: str, tarea_id: str, tarea_nombre: str = "
 
 @app.post("/api/posponer-cierre/{proyecto_id}/{tarea_id}")
 def posponer_cierre(proyecto_id: str, tarea_id: str, tarea_nombre: str = "Desconocida", carpeta: str = "Inbox"):
-    """Mueve pacíficamente una tarea a mañana durante el cierre diario"""
     token = obtener_token()
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     
     url_tarea = f"https://api.ticktick.com/open/v1/project/{proyecto_id}/task/{tarea_id}"
-    tarea = requests.get(url_tarea, headers=headers, timeout=10).json()
+    try:
+        resp_tarea = requests.get(url_tarea, headers=headers, timeout=10)
+        if resp_tarea.status_code != 200:
+            raise HTTPException(status_code=502, detail="TickTick no devolvió la tarea correctamente.")
+        tarea = resp_tarea.json()
+    except requests.exceptions.RequestException as e:
+        logging.exception("Error al obtener tarea para posponer cierre: %s", e)
+        raise HTTPException(status_code=503, detail="TickTick tardó demasiado en responder.")
+
     
     hoy_local = datetime.now(BOGOTA).date()
     manana = hoy_local + timedelta(days=1)

@@ -171,51 +171,6 @@ def necesita_confirmacion_unica(restricciones: dict) -> bool:
     hay_restriccion = restricciones.get("hora_importa") or restricciones.get("contexto_importa")
     return bool(hay_restriccion) and restricciones.get("fuente") in ("inferido_fuerte", "inferido_debil")
 
-def calcular_ventana_visibilidad(restricciones: dict, es_recurrente: bool,
-                                   hora_programada: datetime, ahora: datetime = None) -> dict:
-    """
-    Decide si una tarea de horario estricto (hora_importa=True, ventana=None)
-    debe ser VISIBLE en /api/enfoque en este momento, y si debe recibir el
-    boost de "imnencia activa" en el score.
-
-    Dos perfiles distintos, según si la tarea es recurrente (Tipo A: rutina,
-    pastilla diaria) o evento único (Tipo B: cita médica, vuelo):
-
-    - RECURRENTE: visible solo en [hora_programada, hora_programada + margen].
-      Antes de su hora: oculta (no tiene sentido recordar una pastilla 4h antes).
-      Después del margen: oculta también — el scheduler en background ya la
-      completa/salta sola (gestion_horario_estricto.py), así que nunca debería
-      llegar a este punto realmente, pero por seguridad la ocultamos igual.
-
-    - EVENTO ÚNICO: visible desde [hora_programada - margen] (para darte tiempo
-      de prepararte, ej. 3h antes de una cita) y se queda visible indefinidamente
-      después de la hora — incluyendo días de atraso — porque NUNCA se auto-
-      completa ni se auto-perdona. El score ya penaliza esto por separado
-      vía dias_atraso en calcular_peso_psicologico.
-
-    Devuelve:
-        {
-            "visible": bool,
-            "es_horario_estricto_activo": bool  # dispara el boost de prioridad máxima
-        }
-    """
-    ahora = ahora or datetime.now(BOGOTA)
-    margen = timedelta(minutes=restricciones.get("margen_minutos", MARGEN_MINUTOS_DEFAULT))
-
-    if es_recurrente:
-        inicio_ventana = hora_programada
-        fin_ventana = hora_programada + margen
-        dentro = inicio_ventana <= ahora <= fin_ventana
-        return {"visible": dentro, "es_horario_estricto_activo": dentro}
-
-    # Evento único: visible desde (hora - margen) en adelante, sin límite superior.
-    inicio_ventana = hora_programada - margen
-    visible = ahora >= inicio_ventana
-    # "activo" (boost máximo) solo en la ventana cercana a la hora real,
-    # no en los días de atraso posteriores -- esos ya pesan por dias_atraso.
-    activo = inicio_ventana <= ahora <= hora_programada + margen
-    return {"visible": visible, "es_horario_estricto_activo": activo}
-
 def _parsear_trigger_iso8601(trigger_str: str):
     """
     Parsea un TRIGGER de iCal usado en 'reminders' de TickTick.
@@ -250,7 +205,7 @@ def obtener_anticipo_reminders_minutos(reminders: list):
 
 def calcular_ventana_visibilidad(restricciones: dict, es_recurrente: bool,
                                    hora_programada: datetime, reminders: list = None,
-                                   ahora: datetime = None) -> dict:
+                                   ahora: datetime = None, es_critica_salud: bool = False) -> dict:
     """
     Decide si una tarea de horario estricto (hora_importa=True, ventana=None)
     debe mostrarse en /api/enfoque AHORA, y si merece el boost de "imnencia
@@ -273,14 +228,17 @@ def calcular_ventana_visibilidad(restricciones: dict, es_recurrente: bool,
     ahora = ahora or datetime.now(BOGOTA)
     margen = timedelta(minutes=restricciones.get("margen_minutos", MARGEN_MINUTOS_DEFAULT))
 
-    if es_recurrente:
+    if es_recurrente and not es_critica_salud:
         fin_ventana = hora_programada + margen
         dentro = hora_programada <= ahora <= fin_ventana
         return {"visible": dentro, "es_horario_estricto_activo": dentro}
 
     anticipo_min = obtener_anticipo_reminders_minutos(reminders)
     anticipo = timedelta(minutes=anticipo_min) if anticipo_min is not None else margen
-    inicio_ventana = hora_programada - anticipo
+    # Para salud recurrente vencida, no aplicamos el anticipo "antes de
+    # la hora" (no tiene sentido recordar la pastilla 2h antes cada dia);
+    # solo nos importa que quede visible DESPUES de su hora.
+    inicio_ventana = hora_programada if (es_recurrente and es_critica_salud) else hora_programada - anticipo
 
     visible = ahora >= inicio_ventana
     activo = inicio_ventana <= ahora <= hora_programada + margen
