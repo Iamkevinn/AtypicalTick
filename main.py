@@ -1,6 +1,7 @@
 # main.py - Backend de AtypicalTick con FastAPI
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from auth_ticktick import obtener_token, init_tabla_tokens
 from pydantic import BaseModel
 import json
 import requests
@@ -119,7 +120,7 @@ def registrar_interaccion(tarea_id: str, tarea_nombre: str, energia: str, accion
             ''', (tarea_id, tarea_nombre, energia, emocion, accion, hora_actual, dia_semana, carpeta, etiquetas, metadata_ia, timestamp_str))
     except Exception as e:
         logging.exception("Error al guardar interaccion: %s", e)
-        
+
 init_db()
 init_tabla_feedback()
 init_tabla_predicciones()
@@ -179,13 +180,7 @@ def obtener_patron_contextual(carpeta: str, dia_semana: str):
         logging.exception("Error obteniendo patron contextual: %s", e)
         return None
     
-def obtener_token():
-    try:
-        with open(".token-oauth", "r") as archivo:
-            datos_token = json.load(archivo)
-            return datos_token["access_token"]
-    except FileNotFoundError:
-        return None
+init_tabla_tokens()
 
 def calcular_dias_ausente():
     try:
