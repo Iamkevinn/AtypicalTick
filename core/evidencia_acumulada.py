@@ -3,9 +3,10 @@ import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from db import db_connection
+from config import BOGOTA
 
 # --- Zona horaria centralizada (ver main.py) ---
-BOGOTA = ZoneInfo("America/Bogota")
+ 
 MAX_HORAS_MISMA_SESION = 8
 
 

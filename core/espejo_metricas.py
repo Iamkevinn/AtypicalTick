@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from db import db_connection
+from config import BOGOTA
 
 # --- Zona horaria centralizada (ver main.py) ---
 # Las filas de "interacciones" ahora guardan su timestamp en hora
@@ -11,7 +12,7 @@ from db import db_connection
 # Bogota, en vez de usar datetime('now', ...) de SQLite — que siempre
 # calcula en UTC y desalinearia la ventana de busqueda contra los
 # timestamps ya guardados en Bogota.
-BOGOTA = ZoneInfo("America/Bogota")
+ 
 
 ACCIONES_FRICCION = ('intento', 'afronto_ansiedad', 'pidio_ayuda', 'exposicion_mirar', 'paso1_comprometido')
 ACCIONES_MOVIMIENTO = ('completada', 'avance_parcial', 'paso1_realizado')

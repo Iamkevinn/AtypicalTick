@@ -1,6 +1,6 @@
 # discrepancia_emocional.py
 import logging
-from feedback_discrepancia import fue_rechazada_antes
+from core.feedback_discrepancia import fue_rechazada_antes
 from db import db_connection
 
 MINIMO_REPETICIONES = 5

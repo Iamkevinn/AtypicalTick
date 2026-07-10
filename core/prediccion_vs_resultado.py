@@ -3,6 +3,7 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from db import db_connection
+from config import BOGOTA
 
 # --- Zona horaria centralizada (ver main.py) ---
 # timestamp_prediccion y timestamp_resultado dependian de
@@ -13,7 +14,7 @@ from db import db_connection
 # un contraste prediccion-vs-resultado pareciera ocurrir en un dia
 # distinto al real si la accion sucedia entre las 7pm y la
 # medianoche hora Bogota.
-BOGOTA = ZoneInfo("America/Bogota")
+ 
 
 
 def _ahora_bogota_str() -> str:

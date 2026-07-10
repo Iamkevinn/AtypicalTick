@@ -6,9 +6,10 @@ import json
 import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from clasificacion_tareas import clasificar_tarea
+from core.clasificacion_tareas import clasificar_tarea
 import traceback
 from db import db_connection
+from config import BOGOTA
 
 # --- Zona horaria centralizada (ver main.py) ---
 # tarea_es_horario_estricto_vencida() se llama desde /api/enfoque SIN
@@ -18,7 +19,7 @@ from db import db_connection
 # que una tarea pudiera verse "vencida" o "vigente" segun en que
 # funcion se evaluara, dependiendo de la diferencia entre la hora del
 # servidor y la hora real de Bogota.
-BOGOTA = ZoneInfo("America/Bogota")
+ 
 
 logging.debug("Modulo horario estricto cargado desde %s", __file__)
 

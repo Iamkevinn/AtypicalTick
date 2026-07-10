@@ -12,11 +12,12 @@ from dotenv import load_dotenv
 import os
 from zoneinfo import ZoneInfo
 from db import db_connection
+from config import BOGOTA
 
 logging.debug("Proceso backend iniciado con pid %s", os.getpid())
 
 # --- Zona horaria centralizada del proyecto ---
-BOGOTA = ZoneInfo("America/Bogota")
+ 
 
 def hace_n_dias_bogota(n: int) -> str:
     return (datetime.now(BOGOTA) - timedelta(days=n)).strftime("%Y-%m-%d %H:%M:%S")
@@ -25,27 +26,27 @@ def hoy_bogota_str() -> str:
     return datetime.now(BOGOTA).strftime("%Y-%m-%d")
 
 # --- Modulos clinicos separados ---
-from discrepancia_emocional import PALABRAS_AGOTAMIENTO, PALABRAS_ANSIEDAD, PALABRAS_PERFECCIONISMO
-from deteccion_crisis import detectar_riesgo, respuesta_crisis
-from efectividad_historica_v2 import obtener_efectividad_historica
-from discrepancia_emocional import detectar_discrepancia_motivo
-from siguiente_experimento import generar_siguiente_experimento
-from feedback_discrepancia import init_tabla_feedback, registrar_feedback_discrepancia
-from prediccion_vs_resultado import (
+from core.discrepancia_emocional import PALABRAS_AGOTAMIENTO, PALABRAS_ANSIEDAD, PALABRAS_PERFECCIONISMO
+from core.deteccion_crisis import detectar_riesgo, respuesta_crisis
+from core.efectividad_historica_v2 import obtener_efectividad_historica
+from core.discrepancia_emocional import detectar_discrepancia_motivo
+from core.siguiente_experimento import generar_siguiente_experimento
+from core.feedback_discrepancia import init_tabla_feedback, registrar_feedback_discrepancia
+from core.prediccion_vs_resultado import (
     init_tabla_predicciones, registrar_prediccion,
     cerrar_prediccion_con_resultado, obtener_contrastes_recientes
 )
-from evidencia_acumulada import obtener_evidencia_acumulada
-from correccion_decisiones import (
+from core.evidencia_acumulada import obtener_evidencia_acumulada
+from core.correccion_decisiones import (
     init_tabla_correcciones, registrar_correccion, carpeta_fue_corregida_como_critica
 )
-from espejo_metricas import (
+from core.espejo_metricas import (
     calcular_latencia_activacion, calcular_desglose_aproximaciones,
     construir_anti_patron, construir_evidencia_retorno
 )
 
-from clasificacion_tareas import clasificar_tarea, calcular_ventana_visibilidad
-from gestion_horario_estricto import (
+from core.clasificacion_tareas import clasificar_tarea, calcular_ventana_visibilidad
+from core.gestion_horario_estricto import (
     tarea_es_horario_estricto_vencida,
     procesar_horario_estricto_vencido,
     es_horario_estricto_recurrente,

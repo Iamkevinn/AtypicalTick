@@ -3,6 +3,7 @@ import re
 import re as _re_trigger
 from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
+from config import BOGOTA
 
 # --- Zona horaria centralizada (ver main.py) ---
 # Las ventanas de CONTEXTOS_VALIDOS (ej. "al_despertar" = 4am-11am)
@@ -11,7 +12,7 @@ from zoneinfo import ZoneInfo
 # no se le pasaba "momento" explicitamente, lo que comparaba esas
 # ventanas contra una hora que podia estar desfasada varias horas
 # si el servidor corre en UTC u otra zona.
-BOGOTA = ZoneInfo("America/Bogota")
+ 
 
 PALABRAS_HORA_FUERTE = [
     "pastilla", "medicamento", "medicina", "dosis", "inyeccion", "inyección",
