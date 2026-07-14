@@ -5,10 +5,11 @@ from core.prediccion_vs_resultado import (
 
 from db.interacciones import registrar_interaccion
 
-from services.sesiones_service import registrar_sesion
+from services.sesiones_service import registrar_sesion, registrar_resultado_posponer
 
 from services.ticktick_service import (
     completar_tarea,
+    completar_tarea_y_obtener_recurrencia,
     obtener_tarea,
     posponer_para_manana,
     es_tarea_recurrente,
@@ -25,12 +26,7 @@ def liberar_tarea_service(
     bloqueo_previo: str,
     intervencion_usada: str,
 ):
-    es_recurrente, _ = es_tarea_recurrente(
-        proyecto_id,
-        tarea_id,
-    )
-
-    completar_tarea(
+    es_recurrente = completar_tarea_y_obtener_recurrencia(
         proyecto_id,
         tarea_id,
     )
@@ -40,7 +36,7 @@ def liberar_tarea_service(
         tarea_nombre=tarea_nombre,
         energia=energia,
         accion="completada",
-        emocion_motivo=None,
+        emocion=None,
         carpeta=carpeta,
     )
 
@@ -103,28 +99,18 @@ def posponer_tarea_service(
         tarea_nombre=datos.tarea_nombre,
         energia=datos.energia,
         accion=accion_historial,
-        emocion_motivo=datos.motivo_posponer,
+        emocion=datos.motivo_posponer,
         carpeta=datos.carpeta,
     )
 
-    resultado = (
-        "avance_parcial"
-        if "Avance Parcial" in datos.motivo_posponer
-        else "abandono_consciente"
-    )
-
-    cerrar_prediccion_con_resultado(
-        tarea_id,
-        resultado if accion_historial != "perdonada" else "completada",
-    )
-
-    registrar_sesion(
+    registrar_resultado_posponer(
         tarea_id=tarea_id,
-        bloqueo_inicial=datos.bloqueo_previo,
+        motivo_posponer=datos.motivo_posponer,
+        bloqueo_previo=datos.bloqueo_previo,
         intervencion_usada=datos.intervencion_usada,
-        resultado_final=resultado,
         energia=datos.energia,
         carpeta=datos.carpeta,
+        accion_historial=accion_historial,
     )
 
     return {
@@ -148,7 +134,7 @@ def completar_retroactivo_service(
         tarea_nombre=tarea_nombre,
         energia="desconocida",
         accion="completada_fuera_app",
-        emocion_motivo="Cierre Diario",
+        emocion="Cierre Diario",
         carpeta=carpeta,
     )
 
@@ -183,7 +169,41 @@ def posponer_cierre_service(
         tarea_nombre=tarea_nombre,
         energia="desconocida",
         accion="pospuesta_cierre",
-        emocion_motivo="Sinceridad Nocturna",
+        emocion="Sinceridad Nocturna",
+        carpeta=carpeta,
+    )
+
+    return {
+        "estado": "exito",
+    }
+
+def olvido_cierre_service(
+    proyecto_id: str,
+    tarea_id: str,
+    tarea_nombre: str,
+    carpeta: str,
+):
+    """
+    El usuario no recuerda si realizó la tarea.
+    Se reprograma para mañana y se registra el evento.
+    """
+
+    tarea = obtener_tarea(
+        proyecto_id,
+        tarea_id,
+    )
+
+    posponer_para_manana(
+        proyecto_id,
+        tarea,
+    )
+
+    registrar_interaccion(
+        tarea_id=tarea_id,
+        tarea_nombre=tarea_nombre,
+        energia="desconocida",
+        accion="no_recuerda",
+        emocion="Cierre Diario",
         carpeta=carpeta,
     )
 

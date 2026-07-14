@@ -1,10 +1,9 @@
 # espejo_metricas.py
 import logging
 from datetime import datetime, timedelta
-from zoneinfo import ZoneInfo
 from db import db_connection
 from config import BOGOTA
-
+from utils.fechas import hace_n_dias_bogota
 # --- Zona horaria centralizada (ver main.py) ---
 # Las filas de "interacciones" ahora guardan su timestamp en hora
 # Bogota (registrar_interaccion en main.py lo inserta explicitamente).
@@ -19,9 +18,24 @@ ACCIONES_MOVIMIENTO = ('completada', 'avance_parcial', 'paso1_realizado')
 ACCIONES_RETIRADA = ('rechazada', 'pospuesta', 'abandono_consciente')
 
 
-def _hace_n_dias_bogota(n: int) -> str:
-    return (datetime.now(BOGOTA) - timedelta(days=n)).strftime("%Y-%m-%d %H:%M:%S")
+def calcular_aproximaciones(
+    acciones: dict,
+):
+    aproximaciones = (
+        acciones.get("exposicion_mirar", 0)
+        + acciones.get("paso1_comprometido", 0)
+        + acciones.get("paso1_realizado", 0)
+        + acciones.get("avance_parcial", 0)
+        + acciones.get("intento", 0)
+        + acciones.get("afronto_ansiedad", 0)
+    )
 
+    transiciones = (
+        acciones.get("exposicion_mirar", 0)
+        + acciones.get("paso1_comprometido", 0)
+    )
+
+    return aproximaciones, transiciones
 
 def calcular_latencia_activacion(dias: int = 14):
     """
@@ -41,7 +55,7 @@ def calcular_latencia_activacion(dias: int = 14):
                 SELECT tarea_id, accion, timestamp FROM interacciones
                 WHERE timestamp >= ?
                 ORDER BY tarea_id, timestamp ASC
-            """, (_hace_n_dias_bogota(dias),))
+            """, (hace_n_dias_bogota(dias),))
             filas = cursor.fetchall()
 
         primer_friccion_del_dia = {}  # (tarea_id, fecha) -> datetime
@@ -103,7 +117,7 @@ def calcular_desglose_aproximaciones(dias: int = 7):
     try:
         with db_connection() as conn:
             cursor = conn.cursor()
-            limite = _hace_n_dias_bogota(dias)
+            limite = hace_n_dias_bogota(dias)
 
             cursor.execute("""
                 SELECT accion, COUNT(*) FROM interacciones

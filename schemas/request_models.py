@@ -1,4 +1,5 @@
 from pydantic import BaseModel
+from typing import Optional
 
 class PeticionAutocuidado(BaseModel):
     tipo: str
@@ -48,4 +49,4 @@ class PeticionBloqueo(BaseModel):
     energia: str = "desconocida"
     carpeta: str = ""
     etiquetas: list[str] = []
-    patron_historico: str = None
+    patron_historico: Optional[str] = None

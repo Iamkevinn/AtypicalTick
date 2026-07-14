@@ -18,8 +18,6 @@ TICKTICK_CLIENT_SECRET = os.getenv("TICKTICK_CLIENT_SECRET")
 # usuario real reemplaza este default — el resto del código no cambia.
 USUARIO_DEFAULT = "default_user"
 
-TICKTICK_CLIENT_ID = None      # se cargan desde variables de entorno, ver paso 3
-TICKTICK_CLIENT_SECRET = None
 TICKTICK_TOKEN_URL = "https://ticktick.com/oauth/token"
 
 

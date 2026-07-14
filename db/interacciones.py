@@ -18,14 +18,9 @@ DIAS_SEMANA = (
 
 
 def registrar_interaccion(
-    tarea_id,
-    tarea_nombre,
-    energia,
-    accion,
-    emocion,
-    carpeta,
-    etiquetas,
-    metadata_ia,
+    tarea_id, tarea_nombre, energia, accion, emocion, carpeta,
+    etiquetas=None,
+    metadata_ia=None,
 ):
     try:
         ahora = datetime.now(BOGOTA)

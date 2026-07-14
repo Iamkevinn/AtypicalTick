@@ -4,21 +4,17 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from db import db_connection
 from config import BOGOTA
+from utils.fechas import hace_n_dias_bogota
 
 # --- Zona horaria centralizada (ver main.py) ---
  
 MAX_HORAS_MISMA_SESION = 8
 
-
-def _hace_n_dias_bogota(n: int) -> str:
-    return (datetime.now(BOGOTA) - timedelta(days=n)).strftime("%Y-%m-%d %H:%M:%S")
-
-
 def obtener_evidencia_acumulada():
     try:
         with db_connection() as conn:
             cursor = conn.cursor()
-            limite_30 = _hace_n_dias_bogota(30)
+            limite_30 = hace_n_dias_bogota(30)
             cursor.execute("""
                 SELECT COUNT(*) FROM interacciones
                 WHERE accion IN ('paso1_realizado', 'paso1_comprometido', 'exposicion_mirar', 'intento', 'afronto_ansiedad')

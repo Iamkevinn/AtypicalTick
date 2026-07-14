@@ -6,7 +6,7 @@ from core.discrepancia_emocional import detectar_discrepancia_motivo
 from core.efectividad_historica_v2 import obtener_efectividad_historica
 
 from services.gemini_service import generar_desglose
-from services.intervenciones_service import preparar_intervencion
+from services.intervenciones_service import preparar_intervencion, construir_metadata
 from services.prompt_service import construir_prompt_desglose
 from db.interacciones import registrar_interaccion
 
@@ -38,9 +38,9 @@ def generar_desglose_completo(peticion):
         tarea_nombre=peticion.titulo_tarea,
         energia=peticion.energia,
         accion="afronto_ansiedad",
-        emocion_motivo=peticion.motivo,
+        emocion=peticion.motivo,
         carpeta=peticion.carpeta,
-        metadata_ia=contexto["metadata"],
+        metadata_ia=construir_metadata(contexto),
     )
 
     insight_discrepancia = detectar_discrepancia_motivo(
