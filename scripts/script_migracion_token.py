@@ -1,6 +1,6 @@
 # script_migracion_token.py — correr una vez, luego borrar
 import json
-from auth_ticktick import guardar_token, init_tabla_tokens
+from services.auth_ticktick import guardar_token, init_tabla_tokens
 
 init_tabla_tokens()
 

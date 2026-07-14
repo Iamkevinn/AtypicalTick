@@ -6,8 +6,8 @@ from ticktick.oauth2 import OAuth2
 # Cargar variables desde .env
 load_dotenv()
 
-client_id = os.getenv("CLIENT_ID")
-client_secret = os.getenv("CLIENT_SECRET")
+client_id = os.getenv("TICKTICK_CLIENT_ID")
+client_secret = os.getenv("TICKTICK_CLIENT_SECRET")
 redirect_uri = os.getenv("REDIRECT_URI")
 
 print("Cargando tu llave de acceso secreta...")

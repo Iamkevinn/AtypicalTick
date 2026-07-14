@@ -9,8 +9,8 @@ from dotenv import load_dotenv
 load_dotenv()
 from config import BOGOTA
 
-TICKTICK_CLIENT_ID = os.getenv("CLIENT_ID")
-TICKTICK_CLIENT_SECRET = os.getenv("CLIENT_SECRET")
+TICKTICK_CLIENT_ID = os.getenv("TICKTICK_CLIENT_ID")
+TICKTICK_CLIENT_SECRET = os.getenv("TICKTICK_CLIENT_SECRET")
 
  
 

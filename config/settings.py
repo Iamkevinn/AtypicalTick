@@ -1,3 +1,4 @@
+# settings.py
 import os
 from zoneinfo import ZoneInfo
 
@@ -20,8 +21,14 @@ DEBUG = os.getenv("DEBUG", "false").lower() == "true"
 # TickTick
 # ==========================================================
 
-TICKTICK_CLIENT_ID = os.getenv("CLIENT_ID")
+TICKTICK_CLIENT_ID = os.getenv("TICKTICK_CLIENT_ID")
 
-TICKTICK_CLIENT_SECRET = os.getenv("CLIENT_SECRET")
+TICKTICK_CLIENT_SECRET = os.getenv("TICKTICK_CLIENT_SECRET")
 
 TICKTICK_REDIRECT_URI = os.getenv("REDIRECT_URI")
+
+# ==========================================================
+
+SCHEDULER_INTERVAL_MINUTES = int(
+    os.getenv("SCHEDULER_INTERVAL_MINUTES", "1")
+)
