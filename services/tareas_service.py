@@ -1,7 +1,18 @@
 # tareas_service.py
+from datetime import datetime
+
+from config import BOGOTA
+
 from core.prediccion_vs_resultado import (
     cerrar_prediccion_con_resultado,
 )
+
+from core.clasificacion_tareas import (
+    clasificar_tarea,
+    requiere_chequeo_de_fidelidad,
+)
+
+from services.filtros_enfoque import parsear_fecha_ticktick
 
 from db.interacciones import registrar_interaccion
 
@@ -26,7 +37,7 @@ def liberar_tarea_service(
     bloqueo_previo: str,
     intervencion_usada: str,
 ):
-    es_recurrente = completar_tarea_y_obtener_recurrencia(
+    es_recurrente, tarea = completar_tarea_y_obtener_recurrencia(
         proyecto_id,
         tarea_id,
     )
@@ -54,9 +65,32 @@ def liberar_tarea_service(
         carpeta=carpeta,
     )
 
+    chequeo_fidelidad = None
+
+    if tarea and "dueDate" in tarea:
+
+        restricciones = clasificar_tarea(
+            titulo=tarea.get("title", ""),
+            etiquetas=tarea.get("tags", []),
+            carpeta=carpeta,
+            tiene_hora_especifica=not tarea.get("isAllDay", True),
+        )
+
+        hora_esperada = parsear_fecha_ticktick(tarea["dueDate"])
+
+        if requiere_chequeo_de_fidelidad(
+            restricciones,
+            datetime.now(BOGOTA),
+            hora_esperada,
+        ):
+            chequeo_fidelidad = {
+                "pregunta": "¿Fue en el momento correcto?",
+            }
+
     return {
         "estado": "exito",
         "es_recurrente": es_recurrente,
+        "chequeo_fidelidad": chequeo_fidelidad,
     }
 
 

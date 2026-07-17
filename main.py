@@ -1,5 +1,5 @@
 # main.py - Backend de AtypicalTick con FastAPI
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from schemas.request_models import (
     PeticionAutocuidado,
@@ -10,6 +10,7 @@ from schemas.request_models import (
     TareaNueva,
     PeticionPrediccion,
     PeticionBloqueo,
+    PeticionChequeoFidelidad,
 )
 from services.cierre_service import obtener_tareas_cierre
 
@@ -35,6 +36,7 @@ from db import db_connection
 from scheduler import iniciar_scheduler
 from db.interacciones import registrar_interaccion
 from core.startup import inicializar_backend
+from config import ADMIN_TOKEN
 
 logging.debug("Proceso backend iniciado con pid %s", os.getpid())
 
@@ -210,6 +212,23 @@ def liberar_tarea(
         intervencion_usada=intervencion_usada,
     )
 
+@app.post("/api/chequeo-fidelidad/{tarea_id}")
+def chequeo_fidelidad(tarea_id: str, datos: PeticionChequeoFidelidad):
+    accion = (
+        "fidelidad_confirmada"
+        if datos.respuesta == "si"
+        else "fidelidad_no_confirmada"
+    )
+    registrar_interaccion(
+        tarea_id=tarea_id,
+        tarea_nombre=datos.tarea_nombre,
+        energia=datos.energia,
+        accion=accion,
+        emocion=None,
+        carpeta=datos.carpeta,
+    )
+    return {"estado": "exito"}
+
 @app.post("/api/posponer/{proyecto_id}/{tarea_id}")
 def posponer_tarea(
     proyecto_id: str,
@@ -334,8 +353,24 @@ def olvido_cierre(
         carpeta,
     )
 
-@app.get("/api/test-horario")
-def test_horario():
+@app.post("/api/test-horario")
+def test_horario(x_admin_token: str = Header(default=None)):
+    """
+    Endpoint de DEBUG/mantenimiento manual: dispara el mismo proceso
+    que corre el scheduler en background (auto-saltar rutinas vencidas
+    de horario estricto). Tiene efectos reales sobre TickTick, por eso:
+
+    - Es POST, no GET (un GET no deberia tener efectos secundarios;
+      antes, cualquier prefetch de navegador, bot, o monitor de salud
+      podia disparar auto-completados sin que el usuario lo pidiera).
+    - Requiere el header X-Admin-Token, que debe coincidir con la
+      variable de entorno ADMIN_TOKEN. Si ADMIN_TOKEN no esta
+      configurado, el endpoint queda deshabilitado (no hay forma de
+      "adivinar" un token vacio).
+    """
+    if not ADMIN_TOKEN or x_admin_token != ADMIN_TOKEN:
+        raise HTTPException(status_code=404, detail="No encontrado")
+
     token = obtener_token()
 
     headers = {

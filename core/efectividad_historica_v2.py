@@ -117,7 +117,31 @@ def obtener_efectividad_historica(motivo_bloqueo: str, energia_actual: str):
                     peor_tasa = tasa_fallo
                     peor_intervencion = intervencion
 
-        return mejor_intervencion, peor_intervencion
+        return _resolver_conflicto_mejor_peor(mejor_intervencion, peor_intervencion)
     except Exception as e:
         logging.exception("Error obteniendo efectividad historica: %s", e)
         return None, None
+
+
+def _resolver_conflicto_mejor_peor(mejor_intervencion, peor_intervencion):
+    """
+    Con datos mixtos (una intervención con ~50% de éxito Y ~50% de
+    fallo al mismo tiempo) es posible que la misma intervención
+    califique como "mejor" y "peor" a la vez. Enviar eso tal cual al
+    prompt de Gemini produce una instrucción contradictoria: "esto SI
+    funciona, replícalo" y "esto lo bloquea, evítalo" sobre la misma
+    técnica.
+
+    Ante ese empate, priorizamos la señal POSITIVA (accionable y menos
+    riesgosa) y descartamos la de "peor", en vez de decirle al usuario
+    que evite algo que también le funciona la mitad de las veces.
+    """
+    if mejor_intervencion is not None and mejor_intervencion == peor_intervencion:
+        logging.debug(
+            "Efectividad historica ambigua para '%s': se descarta como "
+            "anti-patron porque tambien califica como mejor intervencion.",
+            mejor_intervencion,
+        )
+        return mejor_intervencion, None
+
+    return mejor_intervencion, peor_intervencion

@@ -2,6 +2,7 @@
 import logging
 from core.feedback_discrepancia import fue_rechazada_antes
 from db import db_connection
+from utils.texto import normalizar
 
 MINIMO_REPETICIONES = 5
 
@@ -42,16 +43,16 @@ def detectar_discrepancia_motivo(motivo_declarado: str, energia_actual: str):
             return None
         intervencion_top, total, exitos = fila
         tasa = round((exitos / total) * 100) if total else 0
-        motivo_lower = motivo_declarado.lower()
+        motivo_lower = normalizar(motivo_declarado)
         categoria_declarada = None
-        if any(palabra in motivo_lower for palabra in PALABRAS_AGOTAMIENTO):
+        if any(normalizar(palabra) in motivo_lower for palabra in PALABRAS_AGOTAMIENTO):
             categoria_declarada = "agotamiento"
-        elif any(palabra in motivo_lower for palabra in PALABRAS_ANSIEDAD):
+        elif any(normalizar(palabra) in motivo_lower for palabra in PALABRAS_ANSIEDAD):
             categoria_declarada = "ansiedad"
-        elif any(palabra in motivo_lower for palabra in PALABRAS_PERFECCIONISMO):
+        elif any(normalizar(palabra) in motivo_lower for palabra in PALABRAS_PERFECCIONISMO):
             categoria_declarada = "perfeccionismo"
-        intervencion_lower = (intervencion_top or "").lower()
-        es_intervencion_ansiedad = "exposición" in intervencion_lower or "amigdalina" in intervencion_lower
+        intervencion_lower = normalizar(intervencion_top)
+        es_intervencion_ansiedad = "exposicion" in intervencion_lower or "amigdalina" in intervencion_lower
         if categoria_declarada == "agotamiento" and es_intervencion_ansiedad and tasa >= 50:
             if fue_rechazada_antes(motivo_declarado, energia_actual, intervencion_top):
                 return None

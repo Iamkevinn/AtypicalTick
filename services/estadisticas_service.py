@@ -16,6 +16,7 @@ def calcular_dias_ausente():
             cursor.execute("""
                 SELECT timestamp
                 FROM interacciones
+                WHERE accion != 'omitida_auto'
                 ORDER BY timestamp DESC
                 LIMIT 1
             """)
@@ -70,5 +71,3 @@ def contar_intentos_hoy():
             e
         )
         return 0
-
-

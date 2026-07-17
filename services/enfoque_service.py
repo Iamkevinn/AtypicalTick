@@ -56,7 +56,7 @@ def obtener_enfoque(
 
     ahora = datetime.now(BOGOTA)
 
-    tareas_validas, info_horario_estricto = filtrar_tareas_visibles(
+    tareas_validas, info_horario_estricto, info_confirmaciones = filtrar_tareas_visibles(
         tareas=todas_las_tareas,
         mapa_carpetas=mapa_carpetas,
         energia=energia,
@@ -91,7 +91,8 @@ def obtener_enfoque(
         ]
 
         atrasadas.sort(
-            key=lambda t: t.get("priority", 0)
+            key=lambda t: t.get("priority", 0),
+            reverse=True,
         )
 
         tareas_validas = recientes + atrasadas[:1]
@@ -122,6 +123,7 @@ def obtener_enfoque(
         mapa_carpetas,
         ahora,
         info_horario_estricto,
+        info_confirmaciones,
     )
 
     return {

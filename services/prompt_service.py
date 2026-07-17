@@ -14,6 +14,12 @@ def construir_prompt_desglose(
 
     instruccion_adaptativa = ""
 
+    # Defensa extra: si por alguna razón mejor y peor coinciden (dato
+    # ambiguo/contradictorio), no le mandamos a Gemini "replica esto" y
+    # "evita esto" sobre la misma intervención en el mismo prompt.
+    if mejor_intervencion and mejor_intervencion == peor_intervencion:
+        peor_intervencion = None
+
     if mejor_intervencion:
         instruccion_adaptativa += (
             f"\n- LO QUE SI FUNCIONA: "

@@ -1,3 +1,4 @@
+# request_models.py
 from pydantic import BaseModel
 from typing import Optional
 
@@ -50,3 +51,9 @@ class PeticionBloqueo(BaseModel):
     carpeta: str = ""
     etiquetas: list[str] = []
     patron_historico: Optional[str] = None
+
+class PeticionChequeoFidelidad(BaseModel):
+    respuesta: str  # "si" o "no"
+    tarea_nombre: str = "Desconocida"
+    energia: str = "desconocida"
+    carpeta: str = "Inbox"

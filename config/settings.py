@@ -32,3 +32,13 @@ TICKTICK_REDIRECT_URI = os.getenv("REDIRECT_URI")
 SCHEDULER_INTERVAL_MINUTES = int(
     os.getenv("SCHEDULER_INTERVAL_MINUTES", "1")
 )
+
+# ==========================================================
+# Endpoints internos / de debug
+# ==========================================================
+# Token compartido para proteger endpoints que no son para el
+# frontend normal (ej. /api/test-horario), que disparan efectos
+# reales sobre TickTick (completar tareas). Si no se configura,
+# esos endpoints quedan deshabilitados por seguridad -- mejor que
+# quedar abiertos por accidente.
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")

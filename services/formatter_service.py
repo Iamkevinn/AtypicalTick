@@ -13,11 +13,14 @@ def formatear_tareas(
     mapa_carpetas,
     dia_actual,
     info_horario_estricto,
+    info_confirmaciones=None,
 ):
     """
     Convierte las tareas de TickTick al formato esperado
     por el frontend.
     """
+
+    info_confirmaciones = info_confirmaciones or {}
 
     lista_formateada = []
 
@@ -82,6 +85,10 @@ def formatear_tareas(
                 info_horario_estricto
                 .get(tarea["id"], {})
                 .get("activo")
+            ),
+
+            "confirmar_clasificacion": info_confirmaciones.get(
+                tarea["id"]
             ),
         })
 

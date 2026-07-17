@@ -1,7 +1,9 @@
+# cierre_service.py
 from datetime import datetime
 
 from config import BOGOTA
 from services.ticktick_service import (
+    obtener_listas,
     obtener_mapa_carpetas,
     obtener_tareas_proyecto,
 )
@@ -17,7 +19,8 @@ def obtener_tareas_cierre():
     - tareas atrasadas con prioridad
     """
 
-    listas, mapa_carpetas = obtener_mapa_carpetas()
+    listas = obtener_listas()
+    mapa_carpetas = obtener_mapa_carpetas(listas)
 
     hoy = datetime.now(BOGOTA).date()
 

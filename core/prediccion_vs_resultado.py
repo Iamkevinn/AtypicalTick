@@ -62,7 +62,12 @@ def cerrar_prediccion_con_resultado(tarea_id: str, resultado_real: str):
             cursor = conn.cursor()
             cursor.execute('''
                 UPDATE predicciones SET resultado_real = ?, timestamp_resultado = ?
-                WHERE tarea_id = ? AND resultado_real IS NULL
+                WHERE id = (
+                    SELECT id FROM predicciones
+                    WHERE tarea_id = ? AND resultado_real IS NULL
+                    ORDER BY timestamp_prediccion DESC
+                    LIMIT 1
+                )
             ''', (resultado_real, _ahora_bogota_str(), tarea_id))
         return True
     except Exception as e:

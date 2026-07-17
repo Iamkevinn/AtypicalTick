@@ -1,6 +1,7 @@
 # services/criticidad_service.py
 
 from core.correccion_decisiones import carpeta_fue_corregida_como_critica
+from utils.texto import normalizar
 
 
 PALABRAS_CRITICAS = (
@@ -54,8 +55,8 @@ def calcular_score_criticidad(
         for t in tarea.get("tags", [])
     ]
 
-    carpeta = carpeta.lower()
-    titulo = titulo.lower()
+    carpeta = normalizar(carpeta)
+    titulo = normalizar(titulo)
 
     if prioridad == 5:
         score += 10

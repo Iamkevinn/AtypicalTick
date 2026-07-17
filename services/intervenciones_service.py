@@ -1,4 +1,7 @@
+# intervenciones_service.py
 import json
+
+from utils.texto import normalizar
 
 
 def preparar_intervencion(
@@ -13,9 +16,9 @@ def preparar_intervencion(
     más adecuada.
     """
 
-    motivo = motivo.lower()
-    carpeta = carpeta.lower()
-    titulo = titulo_tarea.lower()
+    motivo = normalizar(motivo)
+    carpeta = normalizar(carpeta)
+    titulo = normalizar(titulo_tarea)
 
     etiquetas_texto = " ".join(
         t.lower()
@@ -157,11 +160,7 @@ def preparar_intervencion(
         "energia",
     )):
 
-        historial = (
-            patron_historico.lower()
-            if patron_historico
-            else ""
-        )
+        historial = normalizar(patron_historico)
 
         if (
             "ansiedad" in historial

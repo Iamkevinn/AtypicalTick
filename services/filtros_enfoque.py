@@ -9,10 +9,16 @@ from config import BOGOTA
 from core.clasificacion_tareas import (
     clasificar_tarea,
     calcular_ventana_visibilidad,
+    necesita_confirmacion_unica,
 )
 
 from core.gestion_horario_estricto import (
     _es_critica_salud,
+)
+
+from core.correccion_decisiones import (
+    clasificacion_ya_fue_preguntada,
+    clasificacion_fue_rechazada,
 )
 
 
@@ -77,6 +83,14 @@ def filtrar_tareas_visibles(
                 True,
             ),
         )
+
+        # Si el usuario ya nos dijo que esta inferencia estaba mal para
+        # esta tarea puntual (respondió "No" a "¿Detectamos que...?"),
+        # dejamos de tratarla como horario/contexto estricto. Sin esto,
+        # la pregunta de confirmación no tendría ningún efecto real.
+        if restricciones.get("fuente") in ("inferido_fuerte", "inferido_debil") and clasificacion_fue_rechazada(tarea["id"]):
+            restricciones["hora_importa"] = False
+            restricciones["contexto_importa"] = False
 
         es_horario_estricto = bool(
             restricciones.get("hora_importa")
@@ -197,7 +211,44 @@ def filtrar_tareas_visibles(
 
             tareas_validas.append(tarea)
 
+    info_confirmaciones = {}
+
+    for tarea in tareas_validas:
+
+        project_id = tarea.get("projectId", "inbox")
+        carpeta = mapa_carpetas.get(project_id, "Inbox")
+
+        restricciones = clasificar_tarea(
+            titulo=tarea.get("title", ""),
+            etiquetas=tarea.get("tags", []),
+            carpeta=carpeta,
+            tiene_hora_especifica=not tarea.get("isAllDay", True),
+        )
+
+        if not necesita_confirmacion_unica(restricciones):
+            continue
+
+        if clasificacion_ya_fue_preguntada(tarea["id"]):
+            continue
+
+        if restricciones.get("hora_importa"):
+            info_confirmaciones[tarea["id"]] = {
+                "tipo": "hora_fija",
+                "pregunta": "Detectamos que esta tarea tiene una hora fija. ¿Es correcto?",
+                "valor_detectado": "hora_fija",
+            }
+        elif restricciones.get("contexto_importa"):
+            info_confirmaciones[tarea["id"]] = {
+                "tipo": "contexto",
+                "pregunta": (
+                    "Detectamos que esta tarea es parte de tu rutina de "
+                    f"{restricciones.get('contexto_ideal')}. ¿Es correcto?"
+                ),
+                "valor_detectado": restricciones.get("contexto_ideal"),
+            }
+
     return (
         tareas_validas,
         info_horario_estricto,
+        info_confirmaciones,
     )

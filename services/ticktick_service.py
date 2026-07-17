@@ -332,10 +332,12 @@ def completar_tarea_y_obtener_recurrencia(
     task_id: str,
 ):
     """
-    Completa una tarea en TickTick y devuelve si era recurrente.
+    Completa una tarea en TickTick y devuelve si era recurrente,
+    junto con la tarea obtenida (o None si no se pudo consultar).
     """
 
     es_recurrente = False
+    tarea = None
 
     try:
         tarea = obtener_tarea(project_id, task_id)
@@ -348,7 +350,7 @@ def completar_tarea_y_obtener_recurrencia(
 
     completar_tarea(project_id, task_id)
 
-    return es_recurrente
+    return es_recurrente, tarea
 
 def es_tarea_recurrente(project_id: str, task_id: str):
     tarea = obtener_tarea(project_id, task_id)
@@ -368,4 +370,3 @@ def posponer_para_manana(project_id: str, tarea: dict):
         tarea["dueDate"] = manana.strftime("%Y-%m-%dT12:00:00+0000")
 
     actualizar_tarea(project_id, tarea)
-
