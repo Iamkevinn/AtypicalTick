@@ -1,5 +1,5 @@
 # main.py - Backend de AtypicalTick con FastAPI
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from schemas.request_models import (
     PeticionAutocuidado,
@@ -36,7 +36,7 @@ from db import db_connection
 from scheduler import iniciar_scheduler
 from db.interacciones import registrar_interaccion
 from core.startup import inicializar_backend
-from config import ADMIN_TOKEN
+from config import ADMIN_TOKEN, API_KEY, ALLOWED_ORIGINS
 
 logging.debug("Proceso backend iniciado con pid %s", os.getpid())
 
@@ -112,11 +112,36 @@ inicializar_backend(init_db)
     
 load_dotenv()
 
-app = FastAPI(title="AtypicalTick API")
+
+def verificar_api_key(x_api_key: str = Header(default=None)):
+    """
+    Dependencia global de autenticación.
+
+    ANTES: ningún endpoint tenía autenticación. Con CORS abierto a
+    "*" y sin ninguna llave, cualquiera que encontrara la URL del
+    backend podía crear, completar o posponer tareas reales en la
+    cuenta de TickTick conectada.
+
+    Si API_KEY no está configurada (ej. desarrollo local), esta
+    función no hace nada -- el comportamiento es igual que antes.
+    Si SÍ está configurada, todas las rutas la exigen vía el header
+    X-API-Key (ver `dependencies=[Depends(verificar_api_key)]` más
+    abajo), porque se aplica a nivel de app, no por endpoint.
+    """
+    if not API_KEY:
+        return
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="API key inválida o faltante")
+
+
+app = FastAPI(
+    title="AtypicalTick API",
+    dependencies=[Depends(verificar_api_key)],
+)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
