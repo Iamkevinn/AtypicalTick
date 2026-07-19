@@ -162,10 +162,26 @@ def filtrar_tareas_visibles(
                         fecha_str
                     )
 
+                    # Antes esto usaba un umbral fijo de 3600s (1h) sin
+                    # importar el tipo de tarea. Usamos el margen_minutos
+                    # real que ya calculó clasificar_tarea() arriba (90
+                    # min para tags explícitos, 60 para inferencia
+                    # fuerte, 180 para inferencia débil, 120 por
+                    # default) -- así una tarea con margen de 180 min no
+                    # queda oculta hasta que falte 1h, contradiciendo su
+                    # propia clasificación.
+                    margen_segundos = (
+                        restricciones.get(
+                            "margen_minutos",
+                            120,
+                        )
+                        * 60
+                    )
+
                     if (
                         hora_tarea
                         and hora_tarea.timestamp()
-                        > ahora.timestamp() + 3600
+                        > ahora.timestamp() + margen_segundos
                     ):
                         mostrar_ahora = False
 
