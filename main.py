@@ -1,5 +1,7 @@
 # main.py - Backend de AtypicalTick con FastAPI
-from fastapi import FastAPI, Header, HTTPException, Depends
+import secrets
+
+from fastapi import FastAPI, APIRouter, Header, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from schemas.request_models import (
     PeticionAutocuidado,
@@ -11,13 +13,21 @@ from schemas.request_models import (
     PeticionPrediccion,
     PeticionBloqueo,
     PeticionChequeoFidelidad,
+    PeticionLogin,
 )
 from services.cierre_service import obtener_tareas_cierre
 
 from services.auth_ticktick import (
     obtener_token
 )
-    
+
+from services.auth_service import (
+    verificar_password,
+    crear_sesion,
+    validar_sesion,
+    revocar_sesion,
+)
+
 from services.debug_service import obtener_sesiones_debug_service
 from services.enfoque_service import obtener_enfoque
 from services.espejo_service import obtener_espejo_conductual
@@ -36,7 +46,7 @@ from db import db_connection
 from scheduler import iniciar_scheduler
 from db.interacciones import registrar_interaccion
 from core.startup import inicializar_backend
-from config import ADMIN_TOKEN, API_KEY, ALLOWED_ORIGINS
+from config import ADMIN_TOKEN, ALLOWED_ORIGINS
 
 logging.debug("Proceso backend iniciado con pid %s", os.getpid())
 
@@ -113,31 +123,34 @@ inicializar_backend(init_db)
 load_dotenv()
 
 
-def verificar_api_key(x_api_key: str = Header(default=None)):
+def verificar_sesion(authorization: str = Header(default=None)):
     """
-    Dependencia global de autenticación.
+    Dependencia de autenticación para todas las rutas "normales" del
+    frontend/app (todo lo que va colgado de `router`, no de `app`
+    directamente).
 
-    ANTES: ningún endpoint tenía autenticación. Con CORS abierto a
-    "*" y sin ninguna llave, cualquiera que encontrara la URL del
-    backend podía crear, completar o posponer tareas reales en la
-    cuenta de TickTick conectada.
+    ANTES: ningún endpoint tenía autenticación, y luego se usó una
+    API_KEY estática expuesta al cliente via NEXT_PUBLIC_API_KEY (que
+    Next.js incrusta en el JS público del navegador -- cualquiera con
+    devtools podía leerla).
 
-    Si API_KEY no está configurada (ej. desarrollo local), esta
-    función no hace nada -- el comportamiento es igual que antes.
-    Si SÍ está configurada, todas las rutas la exigen vía el header
-    X-API-Key (ver `dependencies=[Depends(verificar_api_key)]` más
-    abajo), porque se aplica a nivel de app, no por endpoint.
+    AHORA: el cliente (web o app móvil) primero hace POST /api/login
+    con una contraseña y recibe un token de sesión aleatorio, que
+    guarda en almacenamiento seguro (no en un build público) y manda
+    en cada request como "Authorization: Bearer <token>". El token
+    vive en la base de datos solo como hash, expira solo y se puede
+    revocar (logout) sin redeploy.
     """
-    if not API_KEY:
-        return
-    if x_api_key != API_KEY:
-        raise HTTPException(status_code=401, detail="API key inválida o faltante")
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="No autenticado")
+
+    token = authorization.removeprefix("Bearer ").strip()
+
+    if not validar_sesion(token):
+        raise HTTPException(status_code=401, detail="Sesión inválida o expirada")
 
 
-app = FastAPI(
-    title="AtypicalTick API",
-    dependencies=[Depends(verificar_api_key)],
-)
+app = FastAPI(title="AtypicalTick API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -147,9 +160,34 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Rutas públicas (sin sesión): solo login. Todo lo demás cuelga de
+# `router`, que exige una sesión válida.
+@app.post("/api/login")
+def login(datos: PeticionLogin):
+    if not verificar_password(datos.password):
+        raise HTTPException(status_code=401, detail="Contraseña incorrecta")
+
+    token, expira = crear_sesion()
+
+    return {
+        "token": token,
+        "expira_en": expira.isoformat(),
+    }
+
+
+router = APIRouter(dependencies=[Depends(verificar_sesion)])
+
+
+@router.post("/api/logout")
+def logout(authorization: str = Header(default=None)):
+    if authorization and authorization.startswith("Bearer "):
+        revocar_sesion(authorization.removeprefix("Bearer ").strip())
+    return {"estado": "exito"}
+
+
 scheduler = iniciar_scheduler(registrar_interaccion)
 
-@app.get("/api/enfoque")
+@router.get("/api/enfoque")
 def obtener_tarea_enfoque(
     energia: str = "alta",
 ):
@@ -158,19 +196,19 @@ def obtener_tarea_enfoque(
         energia=energia,
     )
 
-@app.post("/api/feedback-discrepancia")
+@router.post("/api/feedback-discrepancia")
 def feedback_discrepancia(datos: PeticionFeedbackDiscrepancia):
     registrar_feedback_discrepancia(
         datos.motivo_declarado, datos.energia, datos.intervencion_sugerida, datos.respuesta
     )
     return {"estado": "exito"}
 
-@app.post("/api/corregir-decision")
+@router.post("/api/corregir-decision")
 def corregir_decision(datos: PeticionCorreccion):
     registrar_correccion(datos.tarea_id, datos.tipo_decision, datos.valor_original, datos.correccion, datos.carpeta)
     return {"estado": "exito"}
 
-@app.post("/api/corregir-perdon/{proyecto_id}/{tarea_id}")
+@router.post("/api/corregir-perdon/{proyecto_id}/{tarea_id}")
 def corregir_perdon(
     proyecto_id: str,
     tarea_id: str,
@@ -202,14 +240,14 @@ def corregir_perdon(
     return {"estado": "exito"}
 
 
-@app.post("/api/rechazar/{tarea_id}")
+@router.post("/api/rechazar/{tarea_id}")
 def rechazar_tarea(tarea_id: str, datos: PeticionRechazo):
     if detectar_riesgo(datos.intencion):
         return respuesta_crisis()
     registrar_interaccion(tarea_id, datos.tarea_nombre, datos.energia, "rechazada", datos.intencion, datos.carpeta)
     return {"estado": "exito"}
 
-@app.post("/api/intento/{tarea_id}")
+@router.post("/api/intento/{tarea_id}")
 def registrar_intento_valiente(tarea_id: str, accion: str = "intento", tarea_nombre: str = "", energia: str = "desconocida", carpeta: str = "Inbox"):
     registrar_interaccion(tarea_id, tarea_nombre, energia, accion, None, carpeta)
     if accion in ('paso1_realizado', 'avance_parcial'):
@@ -217,7 +255,7 @@ def registrar_intento_valiente(tarea_id: str, accion: str = "intento", tarea_nom
     return {"estado": "exito"}
 
 
-@app.post("/api/liberar/{proyecto_id}/{tarea_id}")
+@router.post("/api/liberar/{proyecto_id}/{tarea_id}")
 def liberar_tarea(
     proyecto_id: str,
     tarea_id: str,
@@ -237,7 +275,7 @@ def liberar_tarea(
         intervencion_usada=intervencion_usada,
     )
 
-@app.post("/api/chequeo-fidelidad/{tarea_id}")
+@router.post("/api/chequeo-fidelidad/{tarea_id}")
 def chequeo_fidelidad(tarea_id: str, datos: PeticionChequeoFidelidad):
     accion = (
         "fidelidad_confirmada"
@@ -254,7 +292,7 @@ def chequeo_fidelidad(tarea_id: str, datos: PeticionChequeoFidelidad):
     )
     return {"estado": "exito"}
 
-@app.post("/api/posponer/{proyecto_id}/{tarea_id}")
+@router.post("/api/posponer/{proyecto_id}/{tarea_id}")
 def posponer_tarea(
     proyecto_id: str,
     tarea_id: str,
@@ -269,7 +307,7 @@ def posponer_tarea(
         datos,
     )
 
-@app.post("/api/captura")
+@router.post("/api/captura")
 def captura_rapida(tarea: TareaNueva):
     if detectar_riesgo(tarea.texto):
         return respuesta_crisis()
@@ -281,21 +319,21 @@ def captura_rapida(tarea: TareaNueva):
         "mensaje": "Capturada en el Inbox",
     }
 
-@app.post("/api/prediccion")
+@router.post("/api/prediccion")
 def guardar_prediccion(datos: PeticionPrediccion):
     if detectar_riesgo(datos.prediccion):
         return respuesta_crisis()
     registrar_prediccion(datos.tarea_id, datos.tarea_nombre, datos.prediccion, datos.energia, datos.carpeta)
     return {"estado": "exito"}
 
-@app.get("/api/contrastes")
+@router.get("/api/contrastes")
 def ver_contrastes():
     return {"contrastes": obtener_contrastes_recientes(limite=5)}
 
 from services.desglose_service import generar_desglose_completo
 
 
-@app.post("/api/desglose")
+@router.post("/api/desglose")
 def desglose_magico(
     peticion: PeticionBloqueo,
 ):
@@ -304,23 +342,23 @@ def desglose_magico(
 
     return generar_desglose_completo(peticion)
 
-@app.get("/api/historial")
+@router.get("/api/historial")
 def ver_historial():
     return obtener_historial_service()
 
-@app.get("/api/debug-sesiones")
+@router.get("/api/debug-sesiones")
 def ver_sesiones():
     return obtener_sesiones_debug_service()
 
-@app.get("/api/metricas-clinicas")
+@router.get("/api/metricas-clinicas")
 def obtener_metricas_clinicas():
     return obtener_metricas_clinicas_service()
 
-@app.get("/api/espejo-conductual")
+@router.get("/api/espejo-conductual")
 def espejo_conductual():
     return obtener_espejo_conductual()
 
-@app.post("/api/autocuidado")
+@router.post("/api/autocuidado")
 def registrar_autocuidado(datos: PeticionAutocuidado):
     registrar_interaccion(
         tarea_id="autocuidado",
@@ -332,11 +370,11 @@ def registrar_autocuidado(datos: PeticionAutocuidado):
     )
     return {"estado": "exito"}
 
-@app.get("/api/cierre-diario")
+@router.get("/api/cierre-diario")
 def cierre_diario():
     return obtener_tareas_cierre()
 
-@app.post("/api/completar-retroactivo/{proyecto_id}/{tarea_id}")
+@router.post("/api/completar-retroactivo/{proyecto_id}/{tarea_id}")
 def completar_retroactivo(
     proyecto_id: str,
     tarea_id: str,
@@ -350,7 +388,7 @@ def completar_retroactivo(
         carpeta,
     )
 
-@app.post("/api/posponer-cierre/{proyecto_id}/{tarea_id}")
+@router.post("/api/posponer-cierre/{proyecto_id}/{tarea_id}")
 def posponer_cierre(
     proyecto_id: str,
     tarea_id: str,
@@ -364,7 +402,7 @@ def posponer_cierre(
         carpeta,
     )
 
-@app.post("/api/olvido-cierre/{proyecto_id}/{tarea_id}")
+@router.post("/api/olvido-cierre/{proyecto_id}/{tarea_id}")
 def olvido_cierre(
     proyecto_id: str,
     tarea_id: str,
@@ -377,6 +415,13 @@ def olvido_cierre(
         tarea_nombre,
         carpeta,
     )
+
+# Registra todas las rutas protegidas por sesión definidas arriba.
+# /api/login queda fuera (vive directo en `app`, sin exigir sesión) y
+# /api/test-horario también queda fuera (vive directo en `app`, con
+# su propia protección por ADMIN_TOKEN más abajo).
+app.include_router(router)
+
 
 @app.post("/api/test-horario")
 def test_horario(x_admin_token: str = Header(default=None)):
@@ -392,8 +437,11 @@ def test_horario(x_admin_token: str = Header(default=None)):
       variable de entorno ADMIN_TOKEN. Si ADMIN_TOKEN no esta
       configurado, el endpoint queda deshabilitado (no hay forma de
       "adivinar" un token vacio).
+    - La comparación usa secrets.compare_digest (tiempo constante) en
+      vez de "!=", para que el tiempo de respuesta no filtre, byte a
+      byte, cuánto del token adivinó un atacante.
     """
-    if not ADMIN_TOKEN or x_admin_token != ADMIN_TOKEN:
+    if not ADMIN_TOKEN or not secrets.compare_digest(x_admin_token or "", ADMIN_TOKEN):
         raise HTTPException(status_code=404, detail="No encontrado")
 
     token = obtener_token()

@@ -3,11 +3,12 @@ import logging
 import requests
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from cryptography.fernet import Fernet, InvalidToken
 from db import db_connection
 import os
 from dotenv import load_dotenv
 load_dotenv()
-from config import BOGOTA
+from config import BOGOTA, TOKEN_ENCRYPTION_KEY
 
 TICKTICK_CLIENT_ID = os.getenv("TICKTICK_CLIENT_ID")
 TICKTICK_CLIENT_SECRET = os.getenv("TICKTICK_CLIENT_SECRET")
@@ -19,6 +20,34 @@ TICKTICK_CLIENT_SECRET = os.getenv("TICKTICK_CLIENT_SECRET")
 USUARIO_DEFAULT = "default_user"
 
 TICKTICK_TOKEN_URL = "https://ticktick.com/oauth/token"
+
+# ---------------------------------------------------------
+# Cifrado en reposo de access_token / refresh_token.
+# Si no hay TOKEN_ENCRYPTION_KEY configurada, se guardan sin cifrar
+# (igual que antes) -- no recomendado fuera de desarrollo local.
+# Ver scripts/generar_encryption_key.py.
+# ---------------------------------------------------------
+_fernet = Fernet(TOKEN_ENCRYPTION_KEY) if TOKEN_ENCRYPTION_KEY else None
+
+
+def _cifrar(valor: str | None) -> str | None:
+    if valor is None or not _fernet:
+        return valor
+    return _fernet.encrypt(valor.encode("utf-8")).decode("utf-8")
+
+
+def _descifrar(valor: str | None) -> str | None:
+    if valor is None or not _fernet:
+        return valor
+    try:
+        return _fernet.decrypt(valor.encode("utf-8")).decode("utf-8")
+    except InvalidToken:
+        logging.error(
+            "No se pudo descifrar el token guardado: TOKEN_ENCRYPTION_KEY "
+            "no coincide con la que se usó para guardarlo (¿cambió?), o el "
+            "valor en la base de datos está sin cifrar todavía."
+        )
+        return None
 
 
 def init_tabla_tokens():
@@ -48,7 +77,7 @@ def guardar_token(access_token: str, refresh_token: str, expires_in_seconds: int
                 refresh_token=excluded.refresh_token,
                 expires_at=excluded.expires_at,
                 timestamp_actualizado=excluded.timestamp_actualizado
-        ''', (user_id, access_token, refresh_token,
+        ''', (user_id, _cifrar(access_token), _cifrar(refresh_token),
               expira.strftime("%Y-%m-%d %H:%M:%S"),
               datetime.now(BOGOTA).strftime("%Y-%m-%d %H:%M:%S")))
 
@@ -91,6 +120,8 @@ def obtener_token(user_id: str = USUARIO_DEFAULT) -> str | None:
             return None
 
         access_token, refresh_token, expires_at_str = fila
+        access_token = _descifrar(access_token)
+        refresh_token = _descifrar(refresh_token)
 
         if expires_at_str:
             expira = datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=BOGOTA)

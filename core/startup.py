@@ -1,6 +1,7 @@
 import logging
 
 from services.auth_ticktick import init_tabla_tokens
+from services.auth_service import init_tabla_sesiones
 
 from core.feedback_discrepancia import init_tabla_feedback
 from core.prediccion_vs_resultado import init_tabla_predicciones
@@ -26,5 +27,7 @@ def inicializar_backend(init_db):
     init_tabla_lock_horario_estricto()
 
     init_tabla_tokens()
+
+    init_tabla_sesiones()
 
     logging.info("Backend inicializado correctamente.")

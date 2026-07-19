@@ -22,9 +22,12 @@ def obtener_headers(content_type: bool = False):
     token = obtener_token()
 
     if not token:
+        # OJO: 424 (Failed Dependency), no 401. El 401 ya significa
+        # "tu sesión de AtypicalTick expiró" y el frontend reacciona a
+        # un 401 borrando el token de sesión y mandando a /login.
         raise HTTPException(
-            status_code=401,
-            detail="No hay token de acceso."
+            status_code=424,
+            detail="No hay token de acceso a TickTick. Reconecta la cuenta de TickTick."
         )
 
     headers = {

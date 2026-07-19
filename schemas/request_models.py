@@ -52,6 +52,9 @@ class PeticionBloqueo(BaseModel):
     etiquetas: list[str] = []
     patron_historico: Optional[str] = None
 
+class PeticionLogin(BaseModel):
+    password: str
+
 class PeticionChequeoFidelidad(BaseModel):
     respuesta: str  # "si" o "no"
     tarea_nombre: str = "Desconocida"
