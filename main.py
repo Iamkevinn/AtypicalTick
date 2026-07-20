@@ -1,7 +1,7 @@
 # main.py - Backend de AtypicalTick con FastAPI
 import secrets
 
-from fastapi import FastAPI, APIRouter, Header, HTTPException, Depends
+from fastapi import FastAPI, APIRouter, Header, HTTPException, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from schemas.request_models import (
     PeticionAutocuidado,
@@ -26,6 +26,8 @@ from services.auth_service import (
     crear_sesion,
     validar_sesion,
     revocar_sesion,
+    ip_bloqueada,
+    registrar_intento_login,
 )
 
 from services.debug_service import obtener_sesiones_debug_service
@@ -160,13 +162,46 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def _ip_cliente(request: Request) -> str:
+    """
+    Resuelve la IP real del cliente para el rate limiting de login.
+
+    Si el backend corre detrás de un proxy/CDN (Render, Railway, Fly,
+    Vercel, etc. -- lo normal en producción), request.client.host es
+    la IP del proxy, no la del usuario, y X-Forwarded-For trae la IP
+    real como primer valor de la lista. En local (sin proxy) no hay
+    ese header y se usa request.client.host directamente.
+
+    Nota: X-Forwarded-For lo puede mandar cualquiera si no hay un
+    proxy real de por medio filtrándolo -- esto es "mejor esfuerzo"
+    para frenar fuerza bruta simple, no una defensa perfecta contra
+    un atacante que además controla sus propios headers y no pasa
+    por tu proxy.
+    """
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else ""
+
+
 # Rutas públicas (sin sesión): solo login. Todo lo demás cuelga de
 # `router`, que exige una sesión válida.
 @app.post("/api/login")
-def login(datos: PeticionLogin):
+def login(datos: PeticionLogin, request: Request):
+    ip = _ip_cliente(request)
+
+    segundos_restantes = ip_bloqueada(ip)
+    if segundos_restantes > 0:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Demasiados intentos. Intenta de nuevo en {segundos_restantes // 60 + 1} minuto(s).",
+        )
+
     if not verificar_password(datos.password):
+        registrar_intento_login(ip, exitoso=False)
         raise HTTPException(status_code=401, detail="Contraseña incorrecta")
 
+    registrar_intento_login(ip, exitoso=True)
     token, expira = crear_sesion()
 
     return {

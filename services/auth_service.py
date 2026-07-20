@@ -28,6 +28,23 @@ from db import db_connection
 
 FORMATO_FECHA = "%Y-%m-%d %H:%M:%S"
 
+# ---------------------------------------------------------
+# Rate limiting de /api/login
+# ---------------------------------------------------------
+# APP_PASSWORD_HASH usa PBKDF2 200k iteraciones + comparación en
+# tiempo constante, pero eso solo protege contra timing attacks --
+# no pone ningún límite a CUÁNTAS veces alguien puede intentar por
+# red. Como esta es la única puerta que protege todos los datos
+# (patrones de conducta, historial emocional, tareas), sin esto
+# alguien podía intentar contraseñas indefinidamente.
+#
+# Ventana deslizante simple por IP: si hay MAX_INTENTOS fallidos
+# dentro de VENTANA_MINUTOS, la IP queda bloqueada por
+# BLOQUEO_MINUTOS. Un login exitoso limpia el contador de esa IP.
+MAX_INTENTOS_LOGIN = 5
+VENTANA_INTENTOS_MINUTOS = 15
+BLOQUEO_LOGIN_MINUTOS = 15
+
 
 def init_tabla_sesiones():
     with db_connection() as conn:
@@ -39,6 +56,103 @@ def init_tabla_sesiones():
                 ultimo_uso DATETIME
             )
         ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS intentos_login (
+                ip TEXT PRIMARY KEY,
+                intentos INTEGER NOT NULL DEFAULT 0,
+                primer_intento DATETIME NOT NULL,
+                bloqueado_hasta DATETIME
+            )
+        ''')
+
+
+def ip_bloqueada(ip: str) -> int:
+    """
+    Devuelve los segundos restantes de bloqueo para esta IP, o 0 si
+    puede intentar login. Se llama ANTES de verificar la contraseña,
+    para no gastar ni siquiera el PBKDF2 en una IP ya bloqueada.
+    """
+    if not ip:
+        return 0
+    try:
+        with db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT bloqueado_hasta FROM intentos_login WHERE ip = ?",
+                (ip,),
+            )
+            fila = cursor.fetchone()
+
+        if not fila or not fila[0]:
+            return 0
+
+        bloqueado_hasta = datetime.strptime(fila[0], FORMATO_FECHA).replace(tzinfo=BOGOTA)
+        ahora = datetime.now(BOGOTA)
+        if ahora >= bloqueado_hasta:
+            return 0
+
+        return int((bloqueado_hasta - ahora).total_seconds())
+    except Exception:
+        logging.exception("Error revisando bloqueo de login para IP %s", ip)
+        return 0  # ante un error de la propia protección, no dejamos a nadie afuera
+
+
+def registrar_intento_login(ip: str, exitoso: bool):
+    """
+    Actualiza el contador de intentos de esta IP. Un login exitoso
+    borra el registro (empieza limpio la próxima vez). Un fallo suma
+    al contador; si supera MAX_INTENTOS_LOGIN dentro de la ventana,
+    se activa el bloqueo.
+    """
+    if not ip:
+        return
+    try:
+        with db_connection() as conn:
+            cursor = conn.cursor()
+
+            if exitoso:
+                cursor.execute("DELETE FROM intentos_login WHERE ip = ?", (ip,))
+                return
+
+            ahora = datetime.now(BOGOTA)
+            cursor.execute(
+                "SELECT intentos, primer_intento FROM intentos_login WHERE ip = ?",
+                (ip,),
+            )
+            fila = cursor.fetchone()
+
+            if fila:
+                intentos, primer_intento_str = fila
+                primer_intento = datetime.strptime(primer_intento_str, FORMATO_FECHA).replace(tzinfo=BOGOTA)
+                ventana_vencida = ahora - primer_intento > timedelta(minutes=VENTANA_INTENTOS_MINUTOS)
+            else:
+                intentos = 0
+                ventana_vencida = True
+
+            if ventana_vencida:
+                # Empieza (o reinicia) la ventana de conteo.
+                nuevos_intentos = 1
+                nuevo_primer_intento = ahora.strftime(FORMATO_FECHA)
+                bloqueado_hasta = None
+            else:
+                nuevos_intentos = intentos + 1
+                nuevo_primer_intento = primer_intento_str
+                bloqueado_hasta = (
+                    (ahora + timedelta(minutes=BLOQUEO_LOGIN_MINUTOS)).strftime(FORMATO_FECHA)
+                    if nuevos_intentos >= MAX_INTENTOS_LOGIN
+                    else None
+                )
+
+            cursor.execute('''
+                INSERT INTO intentos_login (ip, intentos, primer_intento, bloqueado_hasta)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(ip) DO UPDATE SET
+                    intentos=excluded.intentos,
+                    primer_intento=excluded.primer_intento,
+                    bloqueado_hasta=excluded.bloqueado_hasta
+            ''', (ip, nuevos_intentos, nuevo_primer_intento, bloqueado_hasta))
+    except Exception:
+        logging.exception("Error registrando intento de login para IP %s", ip)
 
 
 def _hash_token(token: str) -> str:

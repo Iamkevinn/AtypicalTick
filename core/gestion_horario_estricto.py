@@ -262,8 +262,6 @@ def procesar_horario_estricto_vencido(headers: dict, mapa_carpetas: dict, regist
 
         for tarea in tareas:
             logging.debug("Evaluando tarea: %s", tarea.get("title"))
-            if "aplicar acido" in tarea.get("title", "").lower():
-                logging.debug("TAREA ENCONTRADA: %s", json.dumps(tarea, indent=2, ensure_ascii=False))
             if tarea.get('status', 0) != 0:
                 continue
 
