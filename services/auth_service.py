@@ -25,6 +25,7 @@ from datetime import datetime, timedelta
 
 from config import APP_PASSWORD_HASH, BOGOTA, SESSION_TTL_DIAS
 from db import db_connection
+from repositories.db_repository import execute
 
 FORMATO_FECHA = "%Y-%m-%d %H:%M:%S"
 
@@ -47,8 +48,10 @@ BLOQUEO_LOGIN_MINUTOS = 15
 
 
 def init_tabla_sesiones():
+    # NOTA (Fase 3 pendiente): sin AUTOINCREMENT ni strftime aquí, este
+    # schema en particular es portable a Postgres casi tal cual.
     with db_connection() as conn:
-        conn.execute('''
+        execute(conn, '''
             CREATE TABLE IF NOT EXISTS sesiones_auth (
                 token_hash TEXT PRIMARY KEY,
                 creado_en DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -56,7 +59,7 @@ def init_tabla_sesiones():
                 ultimo_uso DATETIME
             )
         ''')
-        conn.execute('''
+        execute(conn, '''
             CREATE TABLE IF NOT EXISTS intentos_login (
                 ip TEXT PRIMARY KEY,
                 intentos INTEGER NOT NULL DEFAULT 0,
@@ -76,8 +79,8 @@ def ip_bloqueada(ip: str) -> int:
         return 0
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
+            cursor = execute(
+                conn,
                 "SELECT bloqueado_hasta FROM intentos_login WHERE ip = ?",
                 (ip,),
             )
@@ -108,14 +111,13 @@ def registrar_intento_login(ip: str, exitoso: bool):
         return
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-
             if exitoso:
-                cursor.execute("DELETE FROM intentos_login WHERE ip = ?", (ip,))
+                execute(conn, "DELETE FROM intentos_login WHERE ip = ?", (ip,))
                 return
 
             ahora = datetime.now(BOGOTA)
-            cursor.execute(
+            cursor = execute(
+                conn,
                 "SELECT intentos, primer_intento FROM intentos_login WHERE ip = ?",
                 (ip,),
             )
@@ -143,7 +145,10 @@ def registrar_intento_login(ip: str, exitoso: bool):
                     else None
                 )
 
-            cursor.execute('''
+            # NOTA (Fase 3): ON CONFLICT ... DO UPDATE SET x = excluded.x
+            # es sintaxis válida tanto en SQLite como en Postgres 9.5+,
+            # no requiere cambios.
+            execute(conn, '''
                 INSERT INTO intentos_login (ip, intentos, primer_intento, bloqueado_hasta)
                 VALUES (?, ?, ?, ?)
                 ON CONFLICT(ip) DO UPDATE SET
@@ -202,7 +207,8 @@ def crear_sesion() -> tuple[str, datetime]:
     expira = datetime.now(BOGOTA) + timedelta(days=SESSION_TTL_DIAS)
 
     with db_connection() as conn:
-        conn.execute(
+        execute(
+            conn,
             "INSERT INTO sesiones_auth (token_hash, expira_en) VALUES (?, ?)",
             (_hash_token(token), expira.strftime(FORMATO_FECHA)),
         )
@@ -218,8 +224,8 @@ def validar_sesion(token: str) -> bool:
 
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
+            cursor = execute(
+                conn,
                 "SELECT expira_en FROM sesiones_auth WHERE token_hash = ?",
                 (token_hash,),
             )
@@ -233,7 +239,8 @@ def validar_sesion(token: str) -> bool:
             return False
 
         with db_connection() as conn:
-            conn.execute(
+            execute(
+                conn,
                 "UPDATE sesiones_auth SET ultimo_uso = ? WHERE token_hash = ?",
                 (datetime.now(BOGOTA).strftime(FORMATO_FECHA), token_hash),
             )
@@ -250,7 +257,8 @@ def revocar_sesion(token: str):
         return
     try:
         with db_connection() as conn:
-            conn.execute(
+            execute(
+                conn,
                 "DELETE FROM sesiones_auth WHERE token_hash = ?",
                 (_hash_token(token),),
             )
@@ -261,7 +269,7 @@ def revocar_sesion(token: str):
 def revocar_todas_las_sesiones():
     """Util para un botón de pánico ("cerrar sesión en todos lados")."""
     with db_connection() as conn:
-        conn.execute("DELETE FROM sesiones_auth")
+        execute(conn, "DELETE FROM sesiones_auth")
 
 
 def limpiar_sesiones_expiradas():
@@ -273,7 +281,8 @@ def limpiar_sesiones_expiradas():
     try:
         ahora = datetime.now(BOGOTA).strftime(FORMATO_FECHA)
         with db_connection() as conn:
-            conn.execute(
+            execute(
+                conn,
                 "DELETE FROM sesiones_auth WHERE expira_en < ?",
                 (ahora,),
             )

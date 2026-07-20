@@ -1,6 +1,5 @@
 # gestion_horario_estricto.py
 import requests
-import sqlite3
 import re
 import json
 import logging
@@ -9,6 +8,7 @@ from zoneinfo import ZoneInfo
 from core.clasificacion_tareas import clasificar_tarea
 import traceback
 from db import db_connection
+from repositories.db_repository import execute, IntegrityError
 from config import BOGOTA
 
 # --- Zona horaria centralizada (ver main.py) ---
@@ -168,9 +168,8 @@ def contar_perdidas_consecutivas_salud(tarea_id: str, dias_hacia_atras: int = 7)
     """
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
             limite = (datetime.now(BOGOTA) - timedelta(days=dias_hacia_atras)).strftime("%Y-%m-%d %H:%M:%S")
-            cursor.execute("""
+            cursor = execute(conn, """
                 SELECT date(timestamp) as dia, accion FROM interacciones
                 WHERE tarea_id = ? AND timestamp >= ?
                 ORDER BY timestamp DESC
@@ -210,9 +209,8 @@ def _ya_fue_marcada_desconocida(tarea_id: str, due_date: str) -> bool:
     """
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
             # Buscamos en metadata_ia la coincidencia exacta de la fecha
-            cursor.execute('''
+            cursor = execute(conn, '''
                 SELECT COUNT(*) FROM interacciones
                 WHERE tarea_id = ?
                 AND accion IN ('omitida_auto')
@@ -337,8 +335,7 @@ def procesar_horario_estricto_vencido(headers: dict, mapa_carpetas: dict, regist
 
 def init_tabla_lock_horario_estricto():
     with db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
+        execute(conn, '''
             CREATE TABLE IF NOT EXISTS lock_horario_estricto (
                 tarea_id TEXT NOT NULL,
                 due_date TEXT NOT NULL,
@@ -361,13 +358,15 @@ def _reclamar_procesamiento(tarea_id: str, due_date: str) -> bool:
     """
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
+            execute(
+                conn,
                 "INSERT INTO lock_horario_estricto (tarea_id, due_date) VALUES (?, ?)",
                 (tarea_id, due_date)
             )
         return True
-    except sqlite3.IntegrityError:
+    except IntegrityError:
+        # Ganó la carrera otro proceso del scheduler: esto es esperado,
+        # no un error real. No se registra en logs de error.
         return False
     except Exception as e:
         logging.exception("Error reclamando procesamiento de horario estricto: %s", e)

@@ -5,15 +5,14 @@ from datetime import datetime
 
 from config import BOGOTA
 from db import db_connection
+from repositories.db_repository import execute
 from utils.fechas import hace_n_dias_bogota, hoy_bogota_str
 
 
 def calcular_dias_ausente():
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-
-            cursor.execute("""
+            cursor = execute(conn, """
                 SELECT timestamp
                 FROM interacciones
                 WHERE accion != 'omitida_auto'
@@ -48,9 +47,7 @@ def calcular_dias_ausente():
 def contar_intentos_hoy():
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-
-            cursor.execute("""
+            cursor = execute(conn, """
                 SELECT COUNT(*)
                 FROM interacciones
                 WHERE accion IN (

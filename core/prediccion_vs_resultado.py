@@ -3,6 +3,7 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from db import db_connection
+from repositories.db_repository import execute
 from config import BOGOTA
 
 # --- Zona horaria centralizada (ver main.py) ---
@@ -23,9 +24,10 @@ def _ahora_bogota_str() -> str:
 
 def init_tabla_predicciones():
     """Crea la tabla si no existe. Llamar una vez al iniciar la app."""
+    # NOTA (Fase 3 pendiente): AUTOINCREMENT es sintaxis SQLite; en
+    # Postgres seria GENERATED ALWAYS AS IDENTITY.
     with db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
+        execute(conn, '''
             CREATE TABLE IF NOT EXISTS predicciones (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tarea_id TEXT,
@@ -45,8 +47,7 @@ def registrar_prediccion(tarea_id: str, tarea_nombre: str, prediccion: str, ener
         return False
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
+            execute(conn, '''
                 INSERT INTO predicciones (tarea_id, tarea_nombre, prediccion, energia, carpeta, timestamp_prediccion)
                 VALUES (?, ?, ?, ?, ?, ?)
             ''', (tarea_id, tarea_nombre, prediccion.strip(), energia, carpeta, _ahora_bogota_str()))
@@ -59,8 +60,7 @@ def registrar_prediccion(tarea_id: str, tarea_nombre: str, prediccion: str, ener
 def cerrar_prediccion_con_resultado(tarea_id: str, resultado_real: str):
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
+            execute(conn, '''
                 UPDATE predicciones SET resultado_real = ?, timestamp_resultado = ?
                 WHERE id = (
                     SELECT id FROM predicciones
@@ -88,8 +88,7 @@ _FRASES_RESULTADO = {
 def obtener_contrastes_recientes(limite: int = 5):
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
+            cursor = execute(conn, '''
                 SELECT tarea_nombre, prediccion, resultado_real, timestamp_resultado
                 FROM predicciones
                 WHERE resultado_real IS NOT NULL

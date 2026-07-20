@@ -3,6 +3,7 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from db import db_connection
+from repositories.db_repository import execute
 from config import BOGOTA
 
 # --- Zona horaria centralizada (ver main.py) ---
@@ -10,9 +11,9 @@ from config import BOGOTA
 
 
 def init_tabla_feedback():
+    # NOTA (Fase 3 pendiente): AUTOINCREMENT es sintaxis SQLite.
     with db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
+        execute(conn, '''
             CREATE TABLE IF NOT EXISTS feedback_discrepancia (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 motivo_declarado TEXT,
@@ -27,8 +28,7 @@ def init_tabla_feedback():
 def registrar_feedback_discrepancia(motivo_declarado: str, energia: str, intervencion_sugerida: str, respuesta: str):
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
+            execute(conn, '''
                 INSERT INTO feedback_discrepancia (motivo_declarado, energia, intervencion_sugerida, respuesta, timestamp)
                 VALUES (?, ?, ?, ?, ?)
             ''', (motivo_declarado, energia, intervencion_sugerida, respuesta, datetime.now(BOGOTA).strftime("%Y-%m-%d %H:%M:%S")))
@@ -39,8 +39,7 @@ def registrar_feedback_discrepancia(motivo_declarado: str, energia: str, interve
 def fue_rechazada_antes(motivo_declarado: str, energia: str, intervencion_sugerida: str) -> bool:
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
+            cursor = execute(conn, '''
                 SELECT respuesta FROM feedback_discrepancia
                 WHERE motivo_declarado = ? AND energia = ? AND intervencion_sugerida = ?
                 ORDER BY timestamp DESC LIMIT 1

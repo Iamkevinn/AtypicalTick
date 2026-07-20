@@ -1,6 +1,7 @@
 import logging
 
 from db import db_connection
+from repositories.db_repository import execute
 
 
 def obtener_metricas_clinicas_service():
@@ -13,9 +14,7 @@ def obtener_metricas_clinicas_service():
 
         with db_connection() as conn:
 
-            cursor = conn.cursor()
-
-            cursor.execute("""
+            cursor = execute(conn, """
                 SELECT COUNT(*)
                 FROM sesiones_tarea
                 WHERE bloqueo_inicial != 'Ninguno'

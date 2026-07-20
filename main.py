@@ -45,6 +45,7 @@ import logging
 from dotenv import load_dotenv
 import os
 from db import db_connection
+from repositories.db_repository import execute
 from scheduler import iniciar_scheduler
 from db.interacciones import registrar_interaccion
 from core.startup import inicializar_backend
@@ -78,9 +79,16 @@ from core.gestion_horario_estricto import (
 )
 
 def init_db():
+    # NOTA (migración Supabase/Render, Fase 3 pendiente):
+    # Este CREATE TABLE usa AUTOINCREMENT (sintaxis exclusiva de SQLite;
+    # en Postgres es GENERATED ALWAYS AS IDENTITY o SERIAL). Además, el
+    # patrón de "ALTER TABLE ADD COLUMN + capturar el error si ya existe"
+    # de más abajo es un sustituto casero de migraciones versionadas -- en
+    # la Fase 2 esto se reemplaza por Alembic y esta función deja de
+    # existir tal cual. Por ahora solo se centraliza la forma de ejecutar
+    # el SQL (execute()), no se toca la sintaxis del schema todavía.
     with db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
+        execute(conn, '''
             CREATE TABLE IF NOT EXISTS interacciones (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tarea_id TEXT,
@@ -94,7 +102,7 @@ def init_db():
                 timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         ''')
-        cursor.execute('''
+        execute(conn, '''
             CREATE TABLE IF NOT EXISTS sesiones_tarea (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tarea_id TEXT,
@@ -115,7 +123,7 @@ def init_db():
         ]
         for tabla, columna, tipo in columnas:
             try:
-                cursor.execute(f"ALTER TABLE {tabla} ADD COLUMN {columna} {tipo}")
+                execute(conn, f"ALTER TABLE {tabla} ADD COLUMN {columna} {tipo}")
             except Exception as e:
                 if "duplicate column name" not in str(e).lower():
                     logging.exception("Error agregando columna %s.%s: %s", tabla, columna, e)

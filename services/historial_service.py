@@ -1,6 +1,7 @@
 from fastapi import HTTPException
 
 from db import db_connection
+from repositories.db_repository import fetch_all
 
 
 def obtener_historial_service():
@@ -13,15 +14,18 @@ def obtener_historial_service():
 
         with db_connection() as conn:
 
-            cursor = conn.cursor()
-
-            cursor.execute("""
+            # NOTA (migración): antes esto usaba cursor.fetchall() crudo,
+            # que en SQLite sin row_factory devolvía tuplas (arrays en el
+            # JSON de respuesta). Usamos fetch_all() para que la respuesta
+            # sea una lista de objetos con nombre de columna, igual en
+            # SQLite y en Postgres. Este endpoint es solo de depuración y
+            # no está consumido por el frontend actual, así que este
+            # cambio de forma en el JSON es seguro.
+            filas = fetch_all(conn, """
                 SELECT *
                 FROM interacciones
                 ORDER BY timestamp DESC
             """)
-
-            filas = cursor.fetchall()
 
         return {
             "total": len(filas),

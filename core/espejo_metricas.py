@@ -2,6 +2,7 @@
 import logging
 from datetime import datetime, timedelta
 from db import db_connection
+from repositories.db_repository import execute
 from config import BOGOTA
 from utils.fechas import hace_n_dias_bogota
 # --- Zona horaria centralizada (ver main.py) ---
@@ -50,8 +51,7 @@ def calcular_latencia_activacion(dias: int = 14):
     """
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
+            cursor = execute(conn, """
                 SELECT tarea_id, accion, timestamp FROM interacciones
                 WHERE timestamp >= ?
                 ORDER BY tarea_id, timestamp ASC
@@ -116,17 +116,16 @@ def calcular_desglose_aproximaciones(dias: int = 7):
     """
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
             limite = hace_n_dias_bogota(dias)
 
-            cursor.execute("""
+            cursor = execute(conn, """
                 SELECT accion, COUNT(*) FROM interacciones
                 WHERE timestamp >= ?
                 GROUP BY accion
             """, (limite,))
             acciones = dict(cursor.fetchall())
 
-            cursor.execute("""
+            cursor = execute(conn, """
                 SELECT tarea_id, accion, timestamp FROM interacciones
                 WHERE timestamp >= ?
                 ORDER BY tarea_id, timestamp ASC

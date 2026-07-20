@@ -10,6 +10,7 @@ from core.espejo_analisis import (
     detectar_patron,
 )
 from db import db_connection
+from repositories.db_repository import execute
 
 from utils.fechas import (
     hace_n_dias_bogota,
@@ -47,11 +48,9 @@ def _obtener_datos_espejo():
 
     with db_connection() as conn:
 
-        cursor = conn.cursor()
-
         hace_7_dias = hace_n_dias_bogota(7)
 
-        cursor.execute("""
+        cursor = execute(conn, """
             SELECT accion, COUNT(*)
             FROM interacciones
             WHERE timestamp >= ?
@@ -60,7 +59,7 @@ def _obtener_datos_espejo():
 
         acciones = dict(cursor.fetchall())
 
-        cursor.execute("""
+        cursor = execute(conn, """
             SELECT COUNT(DISTINCT tarea_id)
             FROM interacciones
             WHERE accion IN (
@@ -81,7 +80,7 @@ def _obtener_datos_espejo():
 
         recuperaciones = cursor.fetchone()[0]
 
-        cursor.execute("""
+        cursor = execute(conn, """
             SELECT tarea_id,
                    accion,
                    timestamp
@@ -93,7 +92,7 @@ def _obtener_datos_espejo():
 
         filas_friccion = cursor.fetchall()
 
-        cursor.execute("""
+        cursor = execute(conn, """
             SELECT COUNT(DISTINCT date(timestamp))
             FROM interacciones
             WHERE accion='autocuidado'
@@ -102,7 +101,7 @@ def _obtener_datos_espejo():
 
         dias_autocuidado = cursor.fetchone()[0]
 
-        cursor.execute("""
+        cursor = execute(conn, """
             SELECT carpeta,
                    COUNT(*) as total,
                    SUM(

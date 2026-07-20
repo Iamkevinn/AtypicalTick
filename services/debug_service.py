@@ -1,4 +1,5 @@
 from db import db_connection
+from repositories.db_repository import fetch_all
 
 
 def obtener_sesiones_debug_service():
@@ -9,9 +10,10 @@ def obtener_sesiones_debug_service():
 
     with db_connection() as conn:
 
-        cursor = conn.cursor()
-
-        cursor.execute("""
+        # NOTA (migración): fetch_all() en vez de cursor.fetchall() crudo,
+        # mismo motivo que en historial_service.py -- JSON consistente
+        # entre SQLite y Postgres para un endpoint que devuelve filas tal cual.
+        sesiones = fetch_all(conn, """
             SELECT
                 bloqueo_inicial,
                 intervencion_usada,
@@ -19,8 +21,6 @@ def obtener_sesiones_debug_service():
                 energia
             FROM sesiones_tarea
         """)
-
-        sesiones = cursor.fetchall()
 
     return {
         "sesiones_registradas": sesiones,

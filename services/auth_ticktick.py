@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from cryptography.fernet import Fernet, InvalidToken
 from db import db_connection
+from repositories.db_repository import execute
 import os
 from dotenv import load_dotenv
 load_dotenv()
@@ -52,8 +53,7 @@ def _descifrar(valor: str | None) -> str | None:
 
 def init_tabla_tokens():
     with db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
+        execute(conn, '''
             CREATE TABLE IF NOT EXISTS tokens_oauth (
                 user_id TEXT PRIMARY KEY,
                 access_token TEXT NOT NULL,
@@ -68,8 +68,7 @@ def guardar_token(access_token: str, refresh_token: str, expires_in_seconds: int
                    user_id: str = USUARIO_DEFAULT):
     expira = datetime.now(BOGOTA) + timedelta(seconds=expires_in_seconds)
     with db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
+        execute(conn, '''
             INSERT INTO tokens_oauth (user_id, access_token, refresh_token, expires_at, timestamp_actualizado)
             VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(user_id) DO UPDATE SET
@@ -109,8 +108,8 @@ def _refrescar_token(refresh_token: str, user_id: str) -> str | None:
 def obtener_token(user_id: str = USUARIO_DEFAULT) -> str | None:
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
+            cursor = execute(
+                conn,
                 "SELECT access_token, refresh_token, expires_at FROM tokens_oauth WHERE user_id = ?",
                 (user_id,)
             )

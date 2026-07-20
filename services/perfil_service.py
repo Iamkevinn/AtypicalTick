@@ -2,6 +2,7 @@
 import logging
 
 from db import db_connection
+from repositories.db_repository import execute
 from utils.fechas import hace_n_dias_bogota, hoy_bogota_str
 
 from core.discrepancia_emocional import (
@@ -26,15 +27,14 @@ def analizar_perfil_clinico(carpeta: str, etiquetas: list):
 
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-
             etiquetas_str = (
                 ",".join(etiquetas).lower()
                 if etiquetas
                 else "sin_etiquetas"
             )
 
-            cursor.execute(
+            cursor = execute(
+                conn,
                 """
                 SELECT emocion_motivo, COUNT(*)
                 FROM interacciones
@@ -119,9 +119,8 @@ def obtener_patron_contextual(
 
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-
-            cursor.execute(
+            cursor = execute(
+                conn,
                 """
                 SELECT emocion_motivo,
                        COUNT(*) as frec
@@ -144,7 +143,8 @@ def obtener_patron_contextual(
 
             if not resultado:
 
-                cursor.execute(
+                cursor = execute(
+                    conn,
                     """
                     SELECT emocion_motivo,
                            COUNT(*) as frec
@@ -173,9 +173,7 @@ def obtener_patron_contextual(
 def fue_perdonada_recientemente(tarea_id: str) -> bool:
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-
-            cursor.execute("""
+            cursor = execute(conn, """
                 SELECT COUNT(*)
                 FROM interacciones
                 WHERE tarea_id = ?
@@ -200,9 +198,7 @@ def fue_perdonada_recientemente(tarea_id: str) -> bool:
 def contar_friccion_consecutiva(tarea_id: str):
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-
-            cursor.execute("""
+            cursor = execute(conn, """
                 SELECT accion
                 FROM interacciones
                 WHERE tarea_id = ?

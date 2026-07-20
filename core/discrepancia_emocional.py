@@ -2,6 +2,7 @@
 import logging
 from core.feedback_discrepancia import fue_rechazada_antes
 from db import db_connection
+from repositories.db_repository import execute
 from utils.texto import normalizar
 
 MINIMO_REPETICIONES = 5
@@ -19,15 +20,14 @@ def detectar_discrepancia_motivo(motivo_declarado: str, energia_actual: str):
         return None
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
+            cursor = execute(conn, """
                 SELECT COUNT(*) FROM sesiones_tarea
                 WHERE bloqueo_inicial = ? AND energia = ?
             """, (motivo_declarado, energia_actual))
             total_declaraciones = cursor.fetchone()[0]
             if total_declaraciones < MINIMO_REPETICIONES:
                 return None
-            cursor.execute("""
+            cursor = execute(conn, """
                 SELECT intervencion_usada,
                        COUNT(*) as total,
                        SUM(CASE WHEN resultado_final IN ('completada', 'avance_parcial', 'paso1_realizado') THEN 1 ELSE 0 END) as exitos

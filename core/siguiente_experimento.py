@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from db import db_connection
+from repositories.db_repository import execute
 from config import BOGOTA
 
 # --- Zona horaria centralizada (ver main.py) ---
@@ -12,9 +13,8 @@ from config import BOGOTA
 def generar_siguiente_experimento():
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
             hace_14_dias = (datetime.now(BOGOTA) - timedelta(days=14)).strftime("%Y-%m-%d %H:%M:%S")
-            cursor.execute("""
+            cursor = execute(conn, """
                 SELECT intervencion_usada,
                        COUNT(*) as total,
                        SUM(CASE WHEN resultado_final IN ('completada', 'avance_parcial', 'paso1_realizado') THEN 1 ELSE 0 END) as exitos

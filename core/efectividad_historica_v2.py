@@ -2,6 +2,7 @@
 import logging
 from collections import defaultdict
 from db import db_connection
+from repositories.db_repository import execute
 
 MOTIVOS_EXPOSICION = ["ansiedad", "miedo", "me preocupa", "me da ansiedad"]
 
@@ -17,9 +18,8 @@ def _friccion_va_bajando(tarea_ids: list) -> bool:
 
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
             placeholders = ",".join("?" * len(tarea_ids))
-            cursor.execute(f"""
+            cursor = execute(conn, f"""
                 SELECT tarea_id, accion, timestamp FROM interacciones
                 WHERE tarea_id IN ({placeholders})
                 ORDER BY tarea_id, timestamp ASC
@@ -66,9 +66,8 @@ def _friccion_va_bajando(tarea_ids: list) -> bool:
 def obtener_efectividad_historica(motivo_bloqueo: str, energia_actual: str):
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
 
-            cursor.execute("""
+            cursor = execute(conn, """
                 SELECT intervencion_usada,
                        COUNT(*) as total_veces,
                        SUM(CASE WHEN resultado_final IN ('completada', 'avance_parcial', 'paso1_realizado') THEN 1 ELSE 0 END) as exitos_movimiento,
@@ -105,7 +104,7 @@ def obtener_efectividad_historica(motivo_bloqueo: str, energia_actual: str):
 
                 if total >= minimo_para_evaluar and tasa_fallo > peor_tasa and tasa_fallo >= umbral_fallo_anti_patron:
                     if es_exposicion:
-                        cursor.execute("""
+                        cursor = execute(conn, """
                             SELECT DISTINCT tarea_id FROM sesiones_tarea
                             WHERE bloqueo_inicial = ? AND energia = ? AND intervencion_usada = ?
                         """, (motivo_bloqueo, energia_actual, intervencion))

@@ -3,6 +3,7 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from db import db_connection
+from repositories.db_repository import execute
 from config import BOGOTA
 
 # --- Zona horaria centralizada (ver main.py) ---
@@ -11,9 +12,9 @@ from config import BOGOTA
 
 def init_tabla_correcciones():
     """Crea la tabla si no existe. Llamar una vez al iniciar la app."""
+    # NOTA (Fase 3 pendiente): AUTOINCREMENT es sintaxis SQLite.
     with db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute('''
+        execute(conn, '''
             CREATE TABLE IF NOT EXISTS correcciones_usuario (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 tarea_id TEXT,
@@ -29,8 +30,7 @@ def init_tabla_correcciones():
 def registrar_correccion(tarea_id: str, tipo_decision: str, valor_original: str, correccion: str, carpeta: str = "Inbox"):
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
+            execute(conn, '''
                 INSERT INTO correcciones_usuario (tarea_id, tipo_decision, valor_original, correccion, carpeta, timestamp)
                 VALUES (?, ?, ?, ?, ?, ?)
             ''', (tarea_id, tipo_decision, valor_original, correccion, carpeta, datetime.now(BOGOTA).strftime("%Y-%m-%d %H:%M:%S")))
@@ -43,8 +43,7 @@ def registrar_correccion(tarea_id: str, tipo_decision: str, valor_original: str,
 def carpeta_fue_corregida_como_critica(carpeta: str) -> bool:
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
+            cursor = execute(conn, '''
                 SELECT COUNT(*) FROM correcciones_usuario
                 WHERE tipo_decision = 'perdon_rutina'
                 AND correccion = 'era_critica'
@@ -60,8 +59,7 @@ def carpeta_fue_corregida_como_critica(carpeta: str) -> bool:
 def clasificacion_ya_fue_preguntada(tarea_id: str) -> bool:
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
+            cursor = execute(conn, '''
                 SELECT COUNT(*) FROM correcciones_usuario
                 WHERE tipo_decision = 'clasificacion_tarea' AND tarea_id = ?
             ''', (tarea_id,))
@@ -75,8 +73,7 @@ def clasificacion_ya_fue_preguntada(tarea_id: str) -> bool:
 def clasificacion_fue_rechazada(tarea_id: str) -> bool:
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
+            cursor = execute(conn, '''
                 SELECT correccion FROM correcciones_usuario
                 WHERE tipo_decision = 'clasificacion_tarea' AND tarea_id = ?
                 ORDER BY timestamp DESC LIMIT 1

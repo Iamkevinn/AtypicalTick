@@ -4,6 +4,7 @@ from datetime import datetime
 
 from config import BOGOTA
 from db import db_connection
+from repositories.db_repository import execute
 
 from services.ticktick_service import (
     obtener_listas,
@@ -38,9 +39,10 @@ def obtener_enfoque(
 
     with db_connection() as conn:
 
-        cursor = conn.cursor()
-
-        cursor.execute(
+        # NOTA (Fase 3): date(timestamp) es válido tanto en SQLite como
+        # en Postgres (función nativa de cast a fecha), no requiere cambio.
+        cursor = execute(
+            conn,
             """
             SELECT COUNT(*)
             FROM interacciones

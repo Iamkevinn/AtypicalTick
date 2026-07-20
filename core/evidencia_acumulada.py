@@ -3,6 +3,7 @@ import logging
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from db import db_connection
+from repositories.db_repository import execute
 from config import BOGOTA
 from utils.fechas import hace_n_dias_bogota
 
@@ -13,21 +14,20 @@ MAX_HORAS_MISMA_SESION = 8
 def obtener_evidencia_acumulada():
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
             limite_30 = hace_n_dias_bogota(30)
-            cursor.execute("""
+            cursor = execute(conn, """
                 SELECT COUNT(*) FROM interacciones
                 WHERE accion IN ('paso1_realizado', 'paso1_comprometido', 'exposicion_mirar', 'intento', 'afronto_ansiedad')
                 AND timestamp >= ?
             """, (limite_30,))
             veces_inicio = cursor.fetchone()[0]
-            cursor.execute("""
+            cursor = execute(conn, """
                 SELECT tarea_id, accion, timestamp FROM interacciones
                 WHERE timestamp >= ?
                 ORDER BY tarea_id, timestamp ASC
             """, (limite_30,))
             filas = cursor.fetchall()
-            cursor.execute("""
+            cursor = execute(conn, """
                 SELECT COUNT(*) FROM interacciones
                 WHERE energia = 'baja'
                 AND accion IN ('completada', 'avance_parcial', 'paso1_realizado', 'paso1_comprometido', 'exposicion_mirar')
