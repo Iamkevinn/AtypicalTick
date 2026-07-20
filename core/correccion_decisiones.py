@@ -11,20 +11,11 @@ from config import BOGOTA
 
 
 def init_tabla_correcciones():
-    """Crea la tabla si no existe. Llamar una vez al iniciar la app."""
-    # NOTA (Fase 3 pendiente): AUTOINCREMENT es sintaxis SQLite.
-    with db_connection() as conn:
-        execute(conn, '''
-            CREATE TABLE IF NOT EXISTS correcciones_usuario (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tarea_id TEXT,
-                tipo_decision TEXT,
-                valor_original TEXT,
-                correccion TEXT,
-                carpeta TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
+    # DEPRECATED (Fase 3): el schema ahora lo maneja Alembic. Ver nota
+    # completa en main.py::init_db().
+    logging.warning(
+        "init_tabla_correcciones() esta obsoleta -- el schema lo maneja Alembic."
+    )
 
 
 def registrar_correccion(tarea_id: str, tipo_decision: str, valor_original: str, correccion: str, carpeta: str = "Inbox"):

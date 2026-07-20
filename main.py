@@ -44,8 +44,6 @@ from services.ticktick_service import (
 import logging
 from dotenv import load_dotenv
 import os
-from db import db_connection
-from repositories.db_repository import execute
 from scheduler import iniciar_scheduler
 from db.interacciones import registrar_interaccion
 from core.startup import inicializar_backend
@@ -79,54 +77,20 @@ from core.gestion_horario_estricto import (
 )
 
 def init_db():
-    # NOTA (migración Supabase/Render, Fase 3 pendiente):
-    # Este CREATE TABLE usa AUTOINCREMENT (sintaxis exclusiva de SQLite;
-    # en Postgres es GENERATED ALWAYS AS IDENTITY o SERIAL). Además, el
-    # patrón de "ALTER TABLE ADD COLUMN + capturar el error si ya existe"
-    # de más abajo es un sustituto casero de migraciones versionadas -- en
-    # la Fase 2 esto se reemplaza por Alembic y esta función deja de
-    # existir tal cual. Por ahora solo se centraliza la forma de ejecutar
-    # el SQL (execute()), no se toca la sintaxis del schema todavía.
-    with db_connection() as conn:
-        execute(conn, '''
-            CREATE TABLE IF NOT EXISTS interacciones (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tarea_id TEXT,
-                tarea_nombre TEXT,
-                energia TEXT,
-                emocion_motivo TEXT,
-                accion TEXT,
-                hora INTEGER,
-                dia_semana TEXT, 
-                carpeta TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-        execute(conn, '''
-            CREATE TABLE IF NOT EXISTS sesiones_tarea (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tarea_id TEXT,
-                bloqueo_inicial TEXT,
-                intervencion_usada TEXT,
-                resultado_final TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-
-        columnas = [
-            ("interacciones", "dia_semana", "TEXT"),
-            ("interacciones", "carpeta", "TEXT"),
-            ("interacciones", "etiquetas", "TEXT"),
-            ("sesiones_tarea", "energia", "TEXT"),
-            ("interacciones", "metadata_ia", "TEXT"),
-            ("sesiones_tarea", "carpeta", "TEXT"),
-        ]
-        for tabla, columna, tipo in columnas:
-            try:
-                execute(conn, f"ALTER TABLE {tabla} ADD COLUMN {columna} {tipo}")
-            except Exception as e:
-                if "duplicate column name" not in str(e).lower():
-                    logging.exception("Error agregando columna %s.%s: %s", tabla, columna, e)
+    # DEPRECATED (Fase 3 - migración Supabase/Render): esta función ya
+    # no crea ninguna tabla. El schema completo (incluyendo esta tabla)
+    # ahora lo maneja Alembic -- ver alembic/versions/542826e5466e_esquema_inicial.py
+    # y core/startup.py::inicializar_backend(), que corre
+    # "alembic upgrade head" en vez de llamar a init_db().
+    #
+    # Se deja esta función (en vez de borrarla) por si algún script
+    # externo todavía la importa, para que no rompa con un
+    # ImportError -- pero ya no ejecuta el CREATE TABLE con
+    # AUTOINCREMENT (sintaxis SQLite que no es portable a Postgres).
+    logging.warning(
+        "init_db() esta obsoleta y ya no hace nada -- el schema lo "
+        "maneja Alembic (alembic upgrade head). Ver core/startup.py."
+    )
 
 inicializar_backend(init_db)
     

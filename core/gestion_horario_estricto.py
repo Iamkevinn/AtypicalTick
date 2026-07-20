@@ -334,15 +334,14 @@ def procesar_horario_estricto_vencido(headers: dict, mapa_carpetas: dict, regist
     return procesadas
 
 def init_tabla_lock_horario_estricto():
-    with db_connection() as conn:
-        execute(conn, '''
-            CREATE TABLE IF NOT EXISTS lock_horario_estricto (
-                tarea_id TEXT NOT NULL,
-                due_date TEXT NOT NULL,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-                PRIMARY KEY (tarea_id, due_date)
-            )
-        ''')
+    # DEPRECATED (Fase 3): el schema ahora lo maneja Alembic. Ver nota
+    # completa en main.py::init_db(). (Este SQL en particular ya era
+    # portable a Postgres -- no usaba AUTOINCREMENT -- pero se deja
+    # como no-op igual, para que exista un solo lugar de verdad para
+    # el schema: Alembic.)
+    logging.warning(
+        "init_tabla_lock_horario_estricto() esta obsoleta -- el schema lo maneja Alembic."
+    )
 
 
 def _reclamar_procesamiento(tarea_id: str, due_date: str) -> bool:

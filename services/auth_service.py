@@ -48,7 +48,7 @@ BLOQUEO_LOGIN_MINUTOS = 15
 
 
 def init_tabla_sesiones():
-    # NOTA (Fase 3 pendiente): sin AUTOINCREMENT ni strftime aquí, este
+    # Sin AUTOINCREMENT ni strftime aquí, este
     # schema en particular es portable a Postgres casi tal cual.
     with db_connection() as conn:
         execute(conn, '''

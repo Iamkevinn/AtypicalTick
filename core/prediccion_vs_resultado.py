@@ -23,23 +23,11 @@ def _ahora_bogota_str() -> str:
 
 
 def init_tabla_predicciones():
-    """Crea la tabla si no existe. Llamar una vez al iniciar la app."""
-    # NOTA (Fase 3 pendiente): AUTOINCREMENT es sintaxis SQLite; en
-    # Postgres seria GENERATED ALWAYS AS IDENTITY.
-    with db_connection() as conn:
-        execute(conn, '''
-            CREATE TABLE IF NOT EXISTS predicciones (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                tarea_id TEXT,
-                tarea_nombre TEXT,
-                prediccion TEXT,
-                energia TEXT,
-                carpeta TEXT,
-                resultado_real TEXT,
-                timestamp_prediccion DATETIME DEFAULT CURRENT_TIMESTAMP,
-                timestamp_resultado DATETIME
-            )
-        ''')
+    # DEPRECATED (Fase 3): el schema ahora lo maneja Alembic. Ver nota
+    # completa en main.py::init_db().
+    logging.warning(
+        "init_tabla_predicciones() esta obsoleta -- el schema lo maneja Alembic."
+    )
 
 
 def registrar_prediccion(tarea_id: str, tarea_nombre: str, prediccion: str, energia: str, carpeta: str):

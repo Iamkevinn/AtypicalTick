@@ -11,18 +11,11 @@ from config import BOGOTA
 
 
 def init_tabla_feedback():
-    # NOTA (Fase 3 pendiente): AUTOINCREMENT es sintaxis SQLite.
-    with db_connection() as conn:
-        execute(conn, '''
-            CREATE TABLE IF NOT EXISTS feedback_discrepancia (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                motivo_declarado TEXT,
-                energia TEXT,
-                intervencion_sugerida TEXT,
-                respuesta TEXT,
-                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
+    # DEPRECATED (Fase 3): el schema ahora lo maneja Alembic. Ver nota
+    # completa en main.py::init_db().
+    logging.warning(
+        "init_tabla_feedback() esta obsoleta -- el schema lo maneja Alembic."
+    )
 
 
 def registrar_feedback_discrepancia(motivo_declarado: str, energia: str, intervencion_sugerida: str, respuesta: str):
