@@ -1,5 +1,15 @@
 # script_migracion_token.py — correr una vez, luego borrar
 import json
+import os
+import sys
+
+# Necesario porque al correr "py scripts\script_migracion_token.py",
+# Python solo agrega la carpeta scripts\ a sys.path (no la raíz del
+# proyecto), y por eso "from services..." fallaba con
+# ModuleNotFoundError. Esto agrega la raíz del proyecto explícitamente,
+# sin importar desde qué carpeta se invoque el script.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from services.auth_ticktick import guardar_token, init_tabla_tokens
 
 init_tabla_tokens()

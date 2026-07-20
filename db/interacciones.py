@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 
 from config import BOGOTA
-from db.connection import db_connection
+from repositories.db_repository import db_connection, execute
 
 
 DIAS_SEMANA = (
@@ -26,7 +26,8 @@ def registrar_interaccion(
         ahora = datetime.now(BOGOTA)
 
         with db_connection() as conn:
-            conn.execute(
+            execute(
+                conn,
                 """
                 INSERT INTO interacciones (
                     tarea_id,

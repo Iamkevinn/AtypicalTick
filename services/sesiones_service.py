@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 
 from config import BOGOTA
-from db import db_connection
+from repositories.db_repository import db_connection, execute
 
 from core.prediccion_vs_resultado import cerrar_prediccion_con_resultado
 
@@ -53,9 +53,8 @@ def registrar_sesion(
 
     try:
         with db_connection() as conn:
-            cursor = conn.cursor()
-
-            cursor.execute(
+            execute(
+                conn,
                 """
                 INSERT INTO sesiones_tarea (
                     tarea_id,
