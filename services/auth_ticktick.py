@@ -123,7 +123,11 @@ def obtener_token(user_id: str = USUARIO_DEFAULT) -> str | None:
         refresh_token = _descifrar(refresh_token)
 
         if expires_at_str:
-            expira = datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S").replace(tzinfo=BOGOTA)
+            expira = (
+                expires_at_str if isinstance(expires_at_str, datetime)
+                else datetime.strptime(expires_at_str, "%Y-%m-%d %H:%M:%S")
+            )
+            expira = expira.replace(tzinfo=BOGOTA) if expira.tzinfo is None else expira
             # Margen de 5 minutos para no usar un token a punto de morir
             if datetime.now(BOGOTA) >= expira - timedelta(minutes=5):
                 if not refresh_token:
