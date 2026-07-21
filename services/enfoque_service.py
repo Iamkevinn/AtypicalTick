@@ -4,6 +4,7 @@ from datetime import datetime
 
 from config import BOGOTA
 from db import db_connection
+from db.interacciones import DIAS_SEMANA
 from repositories.db_repository import execute
 
 from services.ticktick_service import (
@@ -123,7 +124,7 @@ def obtener_enfoque(
     tareas = formatear_tareas(
         tareas_validas,
         mapa_carpetas,
-        ahora,
+        DIAS_SEMANA[ahora.weekday()],
         info_horario_estricto,
         info_confirmaciones,
     )

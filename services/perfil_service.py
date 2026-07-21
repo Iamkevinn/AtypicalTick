@@ -42,7 +42,7 @@ def analizar_perfil_clinico(carpeta: str, etiquetas: list):
                     carpeta = ?
                     OR (
                         etiquetas != ''
-                        AND ? LIKE '%' || etiquetas || '%'
+                        AND ? LIKE '%%' || etiquetas || '%%'
                     )
                 )
                 AND emocion_motivo IS NOT NULL
