@@ -39,7 +39,7 @@ def obtener_evidencia_acumulada():
         veces_siguio_tras_bloqueo = 0
         for tarea_id, accion, ts_str in filas:
             try:
-                ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                ts = ts_str if isinstance(ts_str, datetime) else datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
             except (TypeError, ValueError):
                 continue
 

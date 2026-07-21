@@ -23,10 +23,12 @@ def calcular_dias_ausente():
             ultima = cursor.fetchone()
 
         if ultima:
-            fecha_ultima = datetime.strptime(
-                ultima[0],
-                "%Y-%m-%d %H:%M:%S"
-            ).replace(tzinfo=BOGOTA)
+            valor = ultima[0]
+            fecha_ultima = (
+                valor if isinstance(valor, datetime)
+                else datetime.strptime(valor, "%Y-%m-%d %H:%M:%S")
+            )
+            fecha_ultima = fecha_ultima.replace(tzinfo=BOGOTA) if fecha_ultima.tzinfo is None else fecha_ultima
 
             dias = (
                 datetime.now(BOGOTA) - fecha_ultima

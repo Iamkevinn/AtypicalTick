@@ -63,7 +63,7 @@ def calcular_latencia_activacion(dias: int = 14):
 
         for tarea_id, accion, ts_str in filas:
             try:
-                ts = datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
+                ts = ts_str if isinstance(ts_str, datetime) else datetime.strptime(ts_str, "%Y-%m-%d %H:%M:%S")
             except (ValueError, TypeError):
                 continue
 

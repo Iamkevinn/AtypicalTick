@@ -29,6 +29,21 @@ from repositories.db_repository import execute
 
 FORMATO_FECHA = "%Y-%m-%d %H:%M:%S"
 
+
+def _parse_fecha_db(valor) -> datetime:
+    """
+    Normaliza un valor de fecha leído de la base de datos.
+
+    SQLite siempre devuelve texto (hay que parsearlo con FORMATO_FECHA).
+    Postgres, vía psycopg3, devuelve un objeto datetime nativo para
+    columnas DATETIME/TIMESTAMP -- pasarlo por strptime() truena.
+    Esta función acepta ambos casos y siempre devuelve un datetime
+    con tzinfo=BOGOTA.
+    """
+    if isinstance(valor, datetime):
+        return valor if valor.tzinfo else valor.replace(tzinfo=BOGOTA)
+    return datetime.strptime(valor, FORMATO_FECHA).replace(tzinfo=BOGOTA)
+
 # ---------------------------------------------------------
 # Rate limiting de /api/login
 # ---------------------------------------------------------
@@ -89,7 +104,7 @@ def ip_bloqueada(ip: str) -> int:
         if not fila or not fila[0]:
             return 0
 
-        bloqueado_hasta = datetime.strptime(fila[0], FORMATO_FECHA).replace(tzinfo=BOGOTA)
+        bloqueado_hasta = _parse_fecha_db(fila[0])
         ahora = datetime.now(BOGOTA)
         if ahora >= bloqueado_hasta:
             return 0
@@ -125,7 +140,7 @@ def registrar_intento_login(ip: str, exitoso: bool):
 
             if fila:
                 intentos, primer_intento_str = fila
-                primer_intento = datetime.strptime(primer_intento_str, FORMATO_FECHA).replace(tzinfo=BOGOTA)
+                primer_intento = _parse_fecha_db(primer_intento_str)
                 ventana_vencida = ahora - primer_intento > timedelta(minutes=VENTANA_INTENTOS_MINUTOS)
             else:
                 intentos = 0
@@ -234,7 +249,7 @@ def validar_sesion(token: str) -> bool:
         if not fila:
             return False
 
-        expira = datetime.strptime(fila[0], FORMATO_FECHA).replace(tzinfo=BOGOTA)
+        expira = _parse_fecha_db(fila[0])
         if datetime.now(BOGOTA) >= expira:
             return False
 
