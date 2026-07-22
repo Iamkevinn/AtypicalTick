@@ -38,12 +38,33 @@ USE_POSTGRES = bool(DATABASE_URL)
 
 if USE_POSTGRES:
     import psycopg
+    from psycopg_pool import ConnectionPool
     # Excepción que se dispara al violar una restricción UNIQUE/PRIMARY KEY.
     # Se expone unificada como IntegrityError para que el código de
     # negocio (ej. locks atómicos como en gestion_horario_estricto.py)
     # pueda hacer "except IntegrityError" sin preocuparse de si corre
     # sobre SQLite o Postgres.
     IntegrityError = psycopg.errors.UniqueViolation
+
+    # Pool de conexiones: se crea UNA sola vez (perezosamente, en el primer
+    # uso) y se reutiliza en cada request. Antes, cada llamada a
+    # db_connection() abría una conexión TCP+TLS nueva contra Supabase desde
+    # cero (100-300ms cada una) y la cerraba al terminar -- con varias
+    # decenas de queries por request (una por tarea de TickTick), esto por
+    # sí solo explicaba varios segundos de latencia extra. Con el pool,
+    # esas conexiones se abren una vez y se reciclan.
+    _pool: "ConnectionPool | None" = None
+
+    def _obtener_pool() -> "ConnectionPool":
+        global _pool
+        if _pool is None:
+            _pool = ConnectionPool(
+                DATABASE_URL,
+                min_size=1,
+                max_size=5,
+                open=True,
+            )
+        return _pool
 else:
     IntegrityError = sqlite3.IntegrityError
 
@@ -70,16 +91,15 @@ def db_connection():
     de commit/rollback/logging, pero soporta ambos motores.
     """
     if USE_POSTGRES:
-        conn = psycopg.connect(DATABASE_URL)
-        try:
-            yield conn
-            conn.commit()
-        except Exception:
-            conn.rollback()
-            logging.exception("Error usando la base de datos Postgres")
-            raise
-        finally:
-            conn.close()
+        pool = _obtener_pool()
+        with pool.connection() as conn:
+            try:
+                yield conn
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                logging.exception("Error usando la base de datos Postgres")
+                raise
     else:
         conn = sqlite3.connect(SQLITE_DB_PATH, timeout=SQLITE_TIMEOUT_SECONDS)
         conn.row_factory = sqlite3.Row
