@@ -5,6 +5,7 @@ from datetime import datetime
 from config import BOGOTA
 from db import db_connection
 from db.interacciones import DIAS_SEMANA
+from db.pospuestas_hoy import obtener_penalizaciones_hoy
 from repositories.db_repository import execute
 
 from services.ticktick_service import (
@@ -67,6 +68,8 @@ def obtener_enfoque(
 
     dias_ausente = calcular_dias_ausente()
 
+    penalizaciones_hoy = obtener_penalizaciones_hoy()
+
     if dias_ausente > 7:
 
         hoy = ahora.date()
@@ -108,6 +111,7 @@ def obtener_enfoque(
             necesita_calentamiento=necesita_calentamiento,
             mapa_carpetas=mapa_carpetas,
             info_horario_estricto=info_horario_estricto,
+            veces_pospuesta_hoy=penalizaciones_hoy.get(t.get("id"), 0),
         )
     )
 

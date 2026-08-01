@@ -16,6 +16,7 @@ def calcular_peso_psicologico(
     necesita_calentamiento: bool,
     mapa_carpetas: dict,
     info_horario_estricto: dict,
+    veces_pospuesta_hoy: int = 0,
 ):
     """
     Calcula el score psicológico de una tarea.
@@ -107,5 +108,21 @@ def calcular_peso_psicologico(
 
             if perdidas >= 2:
                 score -= 500
+
+    # -----------------------
+    # "Más tarde hoy"
+    # -----------------------
+    # No cambia dueDate ni pasa al día siguiente -- solo empuja la
+    # tarea hacia el final de la cola de HOY. La penalización decae
+    # con cada repetición (300, 200, 100, 50, 50, ...) para que una
+    # tarea evitada varias veces en el mismo día no quede enterrada
+    # para siempre -- eso sería procrastinación invisible, no manejo
+    # consciente de energía.
+    if veces_pospuesta_hoy > 0:
+        penalizacion = max(
+            300 - (veces_pospuesta_hoy - 1) * 100,
+            50,
+        )
+        score += penalizacion
 
     return score

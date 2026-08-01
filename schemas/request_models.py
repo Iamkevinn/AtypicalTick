@@ -10,7 +10,7 @@
 # muy por encima de lo que alguien escribiría a mano -- para no
 # estorbar el uso normal.
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Literal, Optional
 
 class PeticionAutocuidado(BaseModel):
     tipo: str = Field(..., max_length=200)
@@ -42,6 +42,24 @@ class PeticionPosponer(BaseModel):
     bloqueo_previo: str = Field("Ninguno", max_length=500)
     intervencion_usada: str = Field("Ninguna", max_length=500)
 
+class PeticionAvanceParcial(BaseModel):
+    tarea_nombre: str = Field("Desconocida", max_length=500)
+    energia: str = Field("desconocida", max_length=50)
+    carpeta: str = Field("Inbox", max_length=200)
+    # Qué queda pendiente, en palabras del usuario (ej. "escribir la
+    # conclusión"). Vacío es válido: no todo el mundo quiere detallar.
+    restante: str = Field("", max_length=500)
+    # Minutos que el usuario cree que le faltan. Tope de 24h para
+    # evitar valores sin sentido, sigue siendo una estimación libre.
+    estimado_restante_minutos: Optional[int] = Field(None, ge=0, le=1440)
+    bloqueo_previo: str = Field("Ninguno", max_length=500)
+    intervencion_usada: str = Field("Ninguna", max_length=500)
+
+class PeticionPosponerHoy(BaseModel):
+    tarea_nombre: str = Field("Desconocida", max_length=500)
+    energia: str = Field("desconocida", max_length=50)
+    carpeta: str = Field("Inbox", max_length=200)
+
 class TareaNueva(BaseModel):
     texto: str = Field(..., max_length=1000)
 
@@ -72,3 +90,6 @@ class PeticionChequeoFidelidad(BaseModel):
     tarea_nombre: str = Field("Desconocida", max_length=500)
     energia: str = Field("desconocida", max_length=50)
     carpeta: str = Field("Inbox", max_length=200)
+
+class PeticionMicrohabito(BaseModel):
+    accion: Literal["hecho", "ignorado", "pospuesto"]

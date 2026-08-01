@@ -5,6 +5,7 @@ import { motion, AnimatePresence } from "framer-motion";
 import Link from 'next/link';
 import { API_BASE, apiFetch, logout } from "@/lib/api";
 import { useRouter } from "next/navigation";
+import MicrohabitoOverlay from "./MicrohabitoOverlay";
 
 export default function Home() {
   const router = useRouter();
@@ -23,6 +24,9 @@ export default function Home() {
   const [pasosIA, setPasosIA] = useState([]);
   const [energia, setEnergia] = useState(null);
   const [mostrandoMotivosPosponer, setMostrandoMotivosPosponer] = useState(false);
+  const [mostrandoFormAvanceParcial, setMostrandoFormAvanceParcial] = useState(false);
+  const [restanteInput, setRestanteInput] = useState("");
+  const [minutosRestantesInput, setMinutosRestantesInput] = useState(null);
   const [mostrandoIntenciones, setMostrandoIntenciones] = useState(false);
   const [mostrarGuia, setMostrarGuia] = useState(false);
   const [pantallaCrisis, setPantallaCrisis] = useState(null);
@@ -324,6 +328,14 @@ export default function Home() {
     }
   };
 
+  // Abre el mini-formulario ("¿qué te falta?") en vez de disparar la
+  // acción de una vez -- eso permite capturar lo que quedó pendiente.
+  const abrirFormAvanceParcial = () => {
+    setRestanteInput("");
+    setMinutosRestantesInput(null);
+    setMostrandoFormAvanceParcial(true);
+  };
+
   const avanceParcial = async () => {
     if (!tareaActual) return;
     setProcesando(true);
@@ -332,20 +344,55 @@ export default function Home() {
     const { bloqueoPrevio, intervencionUsada } = obtenerDatosBloqueoParaSesion();
 
     try {
-      const resIntento = await apiFetch(`/api/intento/${id}?accion=avance_parcial&tarea_nombre=${encodeURIComponent(titulo)}&energia=${energia}&carpeta=${encodeURIComponent(carpeta)}`, { method: "POST" });
-      const resPosponer = await apiFetch(`/api/posponer/${proyecto_id}/${id}`, {
+      const res = await apiFetch(`/api/avance-parcial/${proyecto_id}/${id}`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tarea_nombre: titulo, energia: energia, carpeta: carpeta || "Inbox", motivo_posponer: "Avance Parcial (Victoria)", bloqueo_previo: bloqueoPrevio, intervencion_usada: intervencionUsada })
+        body: JSON.stringify({
+          tarea_nombre: titulo,
+          energia: energia,
+          carpeta: carpeta || "Inbox",
+          restante: restanteInput,
+          estimado_restante_minutos: minutosRestantesInput,
+          bloqueo_previo: bloqueoPrevio,
+          intervencion_usada: intervencionUsada,
+        })
       });
 
-      if (!resIntento.ok || !resPosponer.ok) {
+      if (!res.ok) {
         setProcesando(false);
         setErrorAccion("No se pudo guardar el avance. Intenta de nuevo.");
         return;
       }
 
+      setMostrandoFormAvanceParcial(false);
       setPantallaIntermedia('parcial');
       setTimeout(() => { resetearYRecargar(3000); }, 0);
+    } catch (error) {
+      setProcesando(false);
+      setErrorAccion("No hay conexión con el servidor. Revisa tu conexión e intenta de nuevo.");
+    }
+  };
+
+  const posponerMasTardeHoy = async () => {
+    if (!tareaActual) return;
+    setProcesando(true);
+    setErrorAccion(null);
+    const { id, titulo, carpeta } = tareaActual;
+
+    try {
+      const res = await apiFetch(`/api/posponer-hoy/${id}`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tarea_nombre: titulo, energia: energia, carpeta: carpeta || "Inbox" })
+      });
+
+      if (!res.ok) {
+        setProcesando(false);
+        setErrorAccion("No se pudo posponer para más tarde. Intenta de nuevo.");
+        return;
+      }
+
+      setPantallaIntermedia('pospuesto_hoy');
+      setMostrandoMotivosPosponer(false);
+      setTimeout(() => { resetearYRecargar(2000); }, 0);
     } catch (error) {
       setProcesando(false);
       setErrorAccion("No hay conexión con el servidor. Revisa tu conexión e intenta de nuevo.");
@@ -464,6 +511,8 @@ export default function Home() {
 
   return (
     <main className={`min-h-screen ${bgMain} flex flex-col items-center p-6 font-sans overflow-y-auto transition-colors duration-1000`}>
+
+      <MicrohabitoOverlay />
 
       <div className="fixed top-6 left-6 z-50 flex gap-3 flex-wrap">
         <button onClick={() => setMostrarGuia(true)} className="text-zinc-400 hover:text-zinc-300 text-sm flex items-center gap-2 bg-black/40 backdrop-blur-md px-4 py-2 rounded-full transition-all border border-white/5">
@@ -634,6 +683,11 @@ export default function Home() {
                       <span className="text-4xl opacity-50">☕</span>
                       <p className={`text-xl font-light tracking-wide ${isSurvival ? 'text-stone-400' : 'text-zinc-400'}`}>Cero estrés. <br /> Mañana será otro día.</p>
                     </motion.div>
+                  ) : pantallaIntermedia === 'pospuesto_hoy' ? (
+                    <motion.div key="pospuesto_hoy" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: animDuration }} className="flex flex-col items-center gap-4">
+                      <span className="text-4xl opacity-50">🕐</span>
+                      <p className={`text-xl font-light tracking-wide ${isSurvival ? 'text-stone-400' : 'text-zinc-400'}`}>Sigue siendo hoy.<br />Solo la corrimos al final de la fila.</p>
+                    </motion.div>
                   ) : pantallaIntermedia === 'parcial' ? (
                     <motion.div key="parcial" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={{ duration: animDuration }} className="flex flex-col items-center gap-4">
                       <span className="text-4xl opacity-80">🌗</span>
@@ -790,14 +844,14 @@ export default function Home() {
                               {!estadoBloqueo && !mostrandoIntenciones && (
                                 <motion.div key="normal" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col gap-3">
 
-                                  {!mostrandoMotivosPosponer ? (
+                                  {!mostrandoMotivosPosponer && !mostrandoFormAvanceParcial ? (
                                     <>
                                       <button onClick={liberarTarea} disabled={procesando} className={`w-full py-4 rounded-2xl font-semibold text-lg transition-all active:scale-95 disabled:opacity-70 ${btnPrimary}`}>
                                         {procesando ? "Soltando..." : "✓ Lo logré completo"}
                                       </button>
 
-                                      <button onClick={avanceParcial} disabled={procesando} className={`w-full py-4 rounded-2xl font-medium text-sm transition-all active:scale-95 disabled:opacity-50 ${isSurvival ? 'bg-stone-800/40 text-stone-300 hover:bg-stone-800' : 'bg-zinc-800/60 text-zinc-300 hover:bg-zinc-700/80 border border-zinc-700/50'}`}>
-                                        {procesando ? "Registrando..." : "🌗 Avancé algo (Dejar resto para mañana)"}
+                                      <button onClick={abrirFormAvanceParcial} disabled={procesando} className={`w-full py-4 rounded-2xl font-medium text-sm transition-all active:scale-95 disabled:opacity-50 ${isSurvival ? 'bg-stone-800/40 text-stone-300 hover:bg-stone-800' : 'bg-zinc-800/60 text-zinc-300 hover:bg-zinc-700/80 border border-zinc-700/50'}`}>
+                                        🌗 Avancé algo (Dejar resto para mañana)
                                       </button>
 
                                       <button onClick={() => setMostrandoMotivosPosponer(true)} disabled={procesando} className={`w-full py-3 rounded-2xl font-medium text-sm transition-all active:scale-95 disabled:opacity-50 ${isSurvival ? 'text-stone-400 hover:text-stone-300' : 'text-zinc-400 hover:text-zinc-300'}`}>
@@ -808,9 +862,50 @@ export default function Home() {
                                         Se me está haciendo difícil
                                       </button>
                                     </>
+                                  ) : mostrandoFormAvanceParcial ? (
+                                    <motion.div initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-3 w-full bg-black/20 p-4 rounded-2xl border border-white/5">
+                                      <p className={`text-sm font-medium ${isSurvival ? 'text-stone-400' : 'text-zinc-400'}`}>Buen trabajo. ¿Qué queda pendiente? (opcional)</p>
+
+                                      <textarea
+                                        value={restanteInput}
+                                        onChange={(e) => setRestanteInput(e.target.value)}
+                                        placeholder="Ej: escribir la conclusión"
+                                        maxLength={500}
+                                        rows={2}
+                                        className={`w-full rounded-xl px-4 py-3 text-sm resize-none outline-none ${isSurvival ? 'bg-stone-900/60 text-stone-200 placeholder-stone-500' : 'bg-zinc-900/60 text-zinc-200 placeholder-zinc-500'}`}
+                                      />
+
+                                      <p className={`text-xs ${isSurvival ? 'text-stone-500' : 'text-zinc-500'}`}>¿Cuánto crees que te falta?</p>
+                                      <div className="flex gap-2">
+                                        {[10, 20, 30, 60].map((min) => (
+                                          <button
+                                            key={min}
+                                            onClick={() => setMinutosRestantesInput(min)}
+                                            className={`flex-1 py-2 rounded-lg text-xs font-medium transition-all active:scale-95 ${minutosRestantesInput === min ? btnPrimary : (isSurvival ? 'bg-stone-800/50 text-stone-300 hover:bg-stone-700/50' : 'bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700/50')}`}
+                                          >
+                                            {min} min
+                                          </button>
+                                        ))}
+                                      </div>
+
+                                      <button onClick={avanceParcial} disabled={procesando} className={`w-full py-3.5 rounded-2xl font-semibold text-sm transition-all active:scale-95 disabled:opacity-70 mt-2 ${btnPrimary}`}>
+                                        {procesando ? "Guardando..." : "Dejar el resto para mañana"}
+                                      </button>
+
+                                      <button onClick={() => setMostrandoFormAvanceParcial(false)} disabled={procesando} className={`text-xs uppercase tracking-widest ${isSurvival ? 'text-stone-400 hover:text-stone-200' : 'text-zinc-400 hover:text-zinc-200'}`}>
+                                        Cancelar
+                                      </button>
+                                    </motion.div>
                                   ) : (
                                     <motion.div initial={{ opacity: 0, y: 5 }} animate={{ opacity: 1, y: 0 }} className="flex flex-col gap-2 w-full bg-black/20 p-4 rounded-2xl border border-white/5">
-                                      <p className={`text-sm mb-2 font-medium ${isSurvival ? 'text-stone-400' : 'text-zinc-400'}`}>Sé honesto contigo. ¿Por qué lo posponemos?</p>
+                                      <button onClick={posponerMasTardeHoy} disabled={procesando} className={`w-full py-3 rounded-xl text-xs font-semibold transition-all active:scale-95 disabled:opacity-50 text-left px-4 ${isSurvival ? 'bg-blue-950/40 hover:bg-blue-900/40 text-blue-200 border border-blue-900/40' : 'bg-blue-950/40 hover:bg-blue-900/40 text-blue-200 border border-blue-900/40'}`}>
+                                        🕐 Más tarde hoy (sigue siendo hoy, solo no ahora)
+                                      </button>
+                                      <p className={`text-[10px] mb-2 ${isSurvival ? 'text-stone-500' : 'text-zinc-500'}`}>No cambia la fecha, solo la manda al final de la fila de hoy.</p>
+
+                                      <div className={`border-t my-1 ${isSurvival ? 'border-stone-700/50' : 'border-zinc-700/50'}`} />
+
+                                      <p className={`text-sm mb-2 font-medium ${isSurvival ? 'text-stone-400' : 'text-zinc-400'}`}>Sé honesto contigo. ¿Por qué lo posponemos para otro día?</p>
 
                                       <button onClick={() => posponerTareaConsciente("Sin energía")} className={`w-full py-3 rounded-xl text-xs transition-colors text-left px-4 ${isSurvival ? 'bg-stone-800/50 hover:bg-stone-700/50 text-stone-300' : 'bg-zinc-800/50 hover:bg-zinc-700/50 text-zinc-300'}`}>
                                         🔋Hoy no tengo energía física/mental
@@ -1072,7 +1167,7 @@ export default function Home() {
                                             </button>
 
                                             <button
-                                              onClick={avanceParcial}
+                                              onClick={() => { setEstadoBloqueo(null); setEstadoPaso1(null); abrirFormAvanceParcial(); }}
                                               className={`w-full py-3.5 rounded-xl text-sm transition-all active:scale-95 border ${isSurvival ? 'bg-transparent text-stone-300 border-stone-600' : 'bg-transparent text-zinc-300 border-zinc-600'}`}
                                             >
                                               Fue suficiente exposición por hoy (Posponer)
@@ -1090,7 +1185,7 @@ export default function Home() {
                                             <button onClick={() => { setEstadoBloqueo(null); setEstadoPaso1(null); setMostrandoPrediccion(false); }} className={`w-full py-3.5 rounded-xl text-sm font-bold transition-all active:scale-95 shadow-lg ${isSurvival ? 'bg-stone-200 text-stone-900 hover:bg-white' : 'bg-blue-600 text-white border border-blue-500 hover:bg-blue-500'}`}>
                                               Me siento capaz de seguir trabajando
                                             </button>
-                                            <button onClick={avanceParcial} className={`w-full py-3.5 rounded-xl text-sm transition-all active:scale-95 border ${isSurvival ? 'bg-transparent text-stone-300 border-stone-600 hover:bg-stone-800/50' : 'bg-transparent text-zinc-300 border-zinc-600 hover:bg-zinc-800/50'}`}>
+                                            <button onClick={() => { setEstadoBloqueo(null); setEstadoPaso1(null); abrirFormAvanceParcial(); }} className={`w-full py-3.5 rounded-xl text-sm transition-all active:scale-95 border ${isSurvival ? 'bg-transparent text-stone-300 border-stone-600 hover:bg-stone-800/50' : 'bg-transparent text-zinc-300 border-zinc-600 hover:bg-zinc-800/50'}`}>
                                               Avancé algo, dejo el resto para mañana
                                             </button>
                                             <button onClick={liberarTarea} className={`w-full py-2 mt-2 text-xs underline decoration-transparent transition-colors ${isSurvival ? 'text-stone-400 hover:text-stone-300' : 'text-zinc-400 hover:text-zinc-300'}`}>

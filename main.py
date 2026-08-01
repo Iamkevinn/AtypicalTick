@@ -9,11 +9,14 @@ from schemas.request_models import (
     PeticionCorreccion,
     PeticionRechazo,
     PeticionPosponer,
+    PeticionAvanceParcial,
+    PeticionPosponerHoy,
     TareaNueva,
     PeticionPrediccion,
     PeticionBloqueo,
     PeticionChequeoFidelidad,
     PeticionLogin,
+    PeticionMicrohabito,
 )
 from services.cierre_service import obtener_tareas_cierre
 
@@ -35,7 +38,11 @@ from services.enfoque_service import obtener_enfoque
 from services.espejo_service import obtener_espejo_conductual
 from services.historial_service import obtener_historial_service
 from services.metricas_service import obtener_metricas_clinicas_service
-from services.tareas_service import completar_retroactivo_service, liberar_tarea_service, olvido_cierre_service, posponer_cierre_service, posponer_tarea_service
+from services.microhabitos_service import (
+    obtener_microhabito_pendiente,
+    responder_microhabito_service,
+)
+from services.tareas_service import avance_parcial_service, completar_retroactivo_service, liberar_tarea_service, olvido_cierre_service, posponer_cierre_service, posponer_hoy_service, posponer_tarea_service
 from services.ticktick_service import (
     crear_tarea,
     reprogramar_para_hoy,
@@ -313,6 +320,54 @@ def posponer_tarea(
         tarea_id,
         datos,
     )
+
+@router.post("/api/avance-parcial/{proyecto_id}/{tarea_id}")
+def avance_parcial(
+    proyecto_id: str,
+    tarea_id: str,
+    datos: PeticionAvanceParcial,
+):
+    if detectar_riesgo(datos.restante):
+        return respuesta_crisis()
+
+    return avance_parcial_service(
+        proyecto_id,
+        tarea_id,
+        datos,
+    )
+
+@router.post("/api/posponer-hoy/{tarea_id}")
+def posponer_hoy(
+    tarea_id: str,
+    datos: PeticionPosponerHoy,
+):
+    # No hay campo de texto libre aquí (a diferencia de /api/posponer),
+    # así que no hace falta detectar_riesgo -- no hay dónde esconder
+    # una señal de crisis en este payload.
+    return posponer_hoy_service(
+        tarea_id,
+        datos,
+    )
+
+@router.get("/api/microhabito")
+def microhabito_pendiente():
+    """
+    Consulta pura, sin efectos secundarios. Pensado para que el
+    frontend haga polling liviano (ej. cada minuto) sin depender del
+    flujo de tareas/enfoque -- estos recordatorios son ajenos a
+    TickTick y deben poder aparecer sin importar qué tarea esté activa.
+    """
+    return obtener_microhabito_pendiente()
+
+@router.post("/api/microhabito/{categoria}")
+def responder_microhabito(
+    categoria: str,
+    datos: PeticionMicrohabito,
+):
+    try:
+        return responder_microhabito_service(categoria, datos.accion)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Categoría de microhábito desconocida")
 
 @router.post("/api/captura")
 def captura_rapida(tarea: TareaNueva):
