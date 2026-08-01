@@ -169,9 +169,22 @@ def actualizar_tarea(
         )
 
     except requests.exceptions.RequestException as e:
+        # NUEVO: capturamos el body real que TickTick devolvió,
+        # no solo el status code.
+        cuerpo_error = None
+        if e.response is not None:
+            try:
+                cuerpo_error = e.response.text
+            except Exception:
+                cuerpo_error = "<no se pudo leer el body>"
+
         logging.exception(
-            "Error actualizando tarea: %s",
-            e,
+            "Error actualizando tarea. project_id=%s task_id=%s payload=%s status=%s body=%s",
+            project_id,
+            task.get("id"),
+            task,
+            getattr(e.response, "status_code", "N/A"),
+            cuerpo_error,
         )
 
         raise HTTPException(

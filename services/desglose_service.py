@@ -86,6 +86,7 @@ def generar_desglose_completo(peticion):
                 "Lee la primera línea u observa el entorno.",
                 "Detente a los 2 minutos y decide si continuar.",
             ],
+            "fuente": "fallback",
             "insight_discrepancia": insight_discrepancia,
             "nombre_intervencion": contexto["nombre_intervencion"],
         }
