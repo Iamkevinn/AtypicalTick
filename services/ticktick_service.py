@@ -152,7 +152,7 @@ def actualizar_tarea(
 
     try:
         respuesta = requests.post(
-            f"{BASE_URL}/project/{project_id}/task/{task['id']}",
+            f"{BASE_URL}/task/{task['id']}",  # <-- sin /project/{project_id}
             headers=obtener_headers(content_type=True),
             json=task,
             timeout=10,
@@ -169,8 +169,6 @@ def actualizar_tarea(
         )
 
     except requests.exceptions.RequestException as e:
-        # NUEVO: capturamos el body real que TickTick devolvió,
-        # no solo el status code.
         cuerpo_error = None
         if e.response is not None:
             try:
@@ -179,10 +177,8 @@ def actualizar_tarea(
                 cuerpo_error = "<no se pudo leer el body>"
 
         logging.exception(
-            "Error actualizando tarea. project_id=%s task_id=%s payload=%s status=%s body=%s",
-            project_id,
+            "Error actualizando tarea. task_id=%s status=%s body=%s",
             task.get("id"),
-            task,
             getattr(e.response, "status_code", "N/A"),
             cuerpo_error,
         )
