@@ -118,7 +118,7 @@ def _obtener_datos_espejo():
             FROM interacciones
             WHERE carpeta!='Inbox'
             GROUP BY carpeta
-            HAVING total>3
+            HAVING COUNT(*)>3
             ORDER BY exitos DESC
             LIMIT 1
         """)
